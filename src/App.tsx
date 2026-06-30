@@ -788,6 +788,23 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="composer-brief-grid">
+                  <div className="composer-brief-card primary">
+                    <span className="composer-brief-label">本次任务</span>
+                    <strong>{currentModel?.displayName || currentModel?.id || '等待选择模型'}</strong>
+                    <span className="composer-brief-copy">
+                      {currentProvider ? `${currentProvider.name} 已就绪，可直接开始创作。` : '先前往设置页配置供应商，再回到工作台继续。'}
+                    </span>
+                  </div>
+                  <div className="composer-brief-card">
+                    <span className="composer-brief-label">Prompt 状态</span>
+                    <strong>{prompt.trim() ? `${prompt.trim().length} 字` : '未填写'}</strong>
+                    <span className="composer-brief-copy">
+                      {mode === 'edit' ? `${refFiles.length} 张参考图已载入当前会话。` : '建议先写清主体、构图、光线和风格。'}
+                    </span>
+                  </div>
+                </div>
+
                 <div className="mode-switch">
                   <label className={mode === 'gen' ? 'active' : ''}>
                     <input type="radio" checked={mode === 'gen'} onChange={() => setMode('gen')} />
@@ -920,6 +937,13 @@ export default function App() {
                     )
                   : null}
 
+                <div className="composer-checklist">
+                  <span className={`composer-check-item ${currentProvider ? 'ready' : ''}`}>供应商</span>
+                  <span className={`composer-check-item ${currentModel ? 'ready' : ''}`}>模型</span>
+                  <span className={`composer-check-item ${prompt.trim() ? 'ready' : ''}`}>Prompt</span>
+                  <span className={`composer-check-item ${mode === 'gen' || refFiles.length ? 'ready' : ''}`}>参考图</span>
+                </div>
+
                 <div className="generate-bar">
                   <div className="generate-hint">
                     <strong>{currentModel?.displayName || '尚未选择模型'}</strong>
@@ -978,6 +1002,19 @@ export default function App() {
               </div>
             </div>
 
+            <div className="result-overview-strip">
+              <div className="result-overview-card">
+                <span className="result-overview-label">生成状态</span>
+                <strong>{isGenerating ? '处理中' : results.length ? '已完成' : '待命'}</strong>
+                <span>{genStatus?.message || '结果将稳定展示在此区域。'}</span>
+              </div>
+              <div className="result-overview-card">
+                <span className="result-overview-label">当前模型</span>
+                <strong>{currentModel?.id || '-'}</strong>
+                <span>{mode === 'edit' ? '支持继续放大和回看结果。' : '生成后可下载、复制和提升分辨率。'}</span>
+              </div>
+            </div>
+
             <div className="results">
               {isGenerating && loadingCount > 0
                 ? Array.from({ length: loadingCount }).map((_, index) => (
@@ -991,7 +1028,7 @@ export default function App() {
                         <div className="empty">
                           <div className="empty-icon">🎨</div>
                           <div className="empty-text">等待生成</div>
-                          <div className="empty-hint">选择模型并填写参数后点击“生成图片”</div>
+                          <div className="empty-hint">选择模型并填写参数后点击“生成图片”，当前结果会在这里形成连续画廊。</div>
                         </div>
                       )
                     : results.map((image, index) => {
@@ -1029,19 +1066,23 @@ export default function App() {
                                   </div>
                                 )}
                             <div className="result-actions">
-                              <button className={`dl-btn ${downloadedIndex === index ? 'downloaded' : ''}`} type="button" onClick={() => void handleDownload(index)}>
-                                {downloadedIndex === index ? '已下载' : '下载图片'}
-                              </button>
-                              <button className="dl-btn" type="button" onClick={() => void handleCopy(index)}>
-                                {copiedIndex === index ? '已复制' : '复制 Base64'}
-                              </button>
+                              <div className="result-primary-actions">
+                                <button className={`dl-btn ${downloadedIndex === index ? 'downloaded' : ''}`} type="button" onClick={() => void handleDownload(index)}>
+                                  {downloadedIndex === index ? '已下载' : '下载图片'}
+                                </button>
+                                <button className="dl-btn" type="button" onClick={() => void handleCopy(index)}>
+                                  {copiedIndex === index ? '已复制' : '复制 Base64'}
+                                </button>
+                              </div>
                               {image.b64_json
                                 ? (
-                                    <>
-                                      <button type="button" className={`chip ${upscaleFactor === 2 ? 'active' : ''}`} onClick={() => setUpscaleFactor(2)}>2x</button>
-                                      <button type="button" className={`chip ${upscaleFactor === 4 ? 'active' : ''}`} onClick={() => setUpscaleFactor(4)}>4x</button>
+                                    <div className="result-upscale-row">
+                                      <div className="result-upscale-chips">
+                                        <button type="button" className={`chip ${upscaleFactor === 2 ? 'active' : ''}`} onClick={() => setUpscaleFactor(2)}>2x</button>
+                                        <button type="button" className={`chip ${upscaleFactor === 4 ? 'active' : ''}`} onClick={() => setUpscaleFactor(4)}>4x</button>
+                                      </div>
                                       <button
-                                        className="dl-btn"
+                                        className="dl-btn result-upscale-btn"
                                         type="button"
                                         disabled={!normalizeBaseUrl(upscaleConfig.apiUrl) || upscalingIndex !== null}
                                         title={!normalizeBaseUrl(upscaleConfig.apiUrl) ? '请先配置放大服务' : ''}
@@ -1049,7 +1090,7 @@ export default function App() {
                                       >
                                         {upscalingIndex === index ? '放大中…' : '提升分辨率'}
                                       </button>
-                                    </>
+                                    </div>
                                   )
                                 : null}
                             </div>
