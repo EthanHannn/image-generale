@@ -37,10 +37,12 @@ export function HistoryView(props: HistoryViewProps) {
     const hitModel = !historyModelFilter || record.modelId === historyModelFilter
     return hitPrompt && hitModel
   })
+  const latestRecord = historyRecords[0]
+  const totalImages = historyRecords.reduce((sum, record) => sum + record.imageCount, 0)
 
   return (
     <div className="view-panel-group">
-      <section className="panel panel-large">
+      <section className="panel panel-large history-view-panel">
         <div className="panel-heading">
           <div>
             <h2>历史记录</h2>
@@ -58,6 +60,23 @@ export function HistoryView(props: HistoryViewProps) {
           </div>
           <div className="storage-bar-track">
             <div className={`storage-bar-fill ${storagePercent > 95 ? 'danger' : storagePercent > 80 ? 'warn' : ''}`} style={{ width: `${storagePercent}%` }} />
+          </div>
+        </div>
+        <div className="history-overview-grid">
+          <div className="history-overview-card accent">
+            <span className="history-overview-label">历史资产</span>
+            <strong>{historyRecords.length}</strong>
+            <span className="history-overview-copy">当前已归档 {totalImages} 张图片，支持回显与二次筛选。</span>
+          </div>
+          <div className="history-overview-card">
+            <span className="history-overview-label">最新记录</span>
+            <strong>{latestRecord?.modelId || '暂无记录'}</strong>
+            <span className="history-overview-copy">{latestRecord?.prompt || '生成图片后会在这里形成可回溯资产。'}</span>
+          </div>
+          <div className="history-overview-card">
+            <span className="history-overview-label">存储占用</span>
+            <strong>{storagePercent.toFixed(1)}%</strong>
+            <span className="history-overview-copy">当前使用 {formatSize(storageUsed)}，接近上限时会触发自动清理策略。</span>
           </div>
         </div>
         <HistoryToolbar
