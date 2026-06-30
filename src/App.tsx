@@ -1111,7 +1111,34 @@ export default function App() {
 
   function renderSettingsView() {
     return (
-      <div className="settings-grid">
+      <div className="settings-view">
+        <section className="panel settings-overview-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>系统设置概览</h2>
+              <div className="panel-caption">将供应商、放大服务、历史存储和主题切换收敛到统一的桌面端设置中心。</div>
+            </div>
+          </div>
+          <div className="settings-overview-grid">
+            <div className="settings-overview-card accent">
+              <span className="settings-overview-label">供应商资源</span>
+              <strong>{providers.length}</strong>
+              <span className="settings-overview-copy">{currentProvider?.name || '当前未选择默认供应商'}</span>
+            </div>
+            <div className="settings-overview-card">
+              <span className="settings-overview-label">历史目录</span>
+              <strong>{historyRootDir ? '已配置' : '默认目录'}</strong>
+              <span className="settings-overview-copy">{historyRootDir || '未手动设置时将使用应用默认目录'}</span>
+            </div>
+            <div className="settings-overview-card">
+              <span className="settings-overview-label">主题外观</span>
+              <strong>{theme === 'dark' ? '深色' : '浅色'}</strong>
+              <span className="settings-overview-copy">切换后会立即同步到整个桌面工作台。</span>
+            </div>
+          </div>
+        </section>
+
+        <div className="settings-grid">
         <section className="panel settings-panel">
           <div className="panel-heading">
             <div>
@@ -1135,7 +1162,8 @@ export default function App() {
               </div>
             </div>
 
-            <div className="provider-settings-form">
+            <div className="provider-settings-form settings-surface">
+              <div className="settings-form-kicker">Provider Editor</div>
               <div className="row">
                 <div style={{ flex: '0 0 240px' }}>
                   <label htmlFor="providerSelect">供应商</label>
@@ -1232,6 +1260,7 @@ export default function App() {
             <div className="storage-setting-meta">
               <span>当前已用：{formatSize(storageUsed)}</span>
               <span>上限：1024 MB</span>
+              <span>{historyRootDir ? '后续新记录会落入当前目录' : '当前仍使用应用默认目录'}</span>
             </div>
           </div>
         </section>
@@ -1256,6 +1285,7 @@ export default function App() {
             </button>
           </div>
         </section>
+      </div>
       </div>
     )
   }
