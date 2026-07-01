@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
@@ -71,7 +71,6 @@ export default function App() {
     apiUrl: '',
     apiKey: '',
   })
-  const [providerHint, setProviderHint] = useState('请选择或新增一个供应商配置，保存后即可使用。')
   const [configReady, setConfigReady] = useState(false)
   const [connStatus, setConnStatus] = useState<StatusValue>(null)
   const [genStatus, setGenStatus] = useState<StatusValue>(null)
@@ -106,6 +105,9 @@ export default function App() {
   const [storageUsed, setStorageUsed] = useState(0)
   const [historyRootDir, setHistoryRootDir] = useState('')
   const [historyDirPending, setHistoryDirPending] = useState(false)
+
+  const [providerModalOpen, setProviderModalOpen] = useState(false)
+  const [providerModalMode, setProviderModalMode] = useState<'create' | 'edit'>('create')
 
   const currentProvider = providers.find(provider => provider.id === currentProviderId) || null
   const currentModel = models.find(model => model.id === currentModelId) || null
@@ -155,14 +157,10 @@ export default function App() {
 
   useEffect(() => {
     const provider = providers.find(item => item.id === currentProviderId)
-    if (provider) {
+    if (provider)
       setProviderDraft(provider)
-      setProviderHint('当前配置将用于拉模型和生成图片。')
-    }
-    else {
+    else
       setProviderDraft({ id: '', name: '', apiUrl: '', apiKey: '' })
-      setProviderHint('请选择或新增一个供应商配置，保存后即可使用。')
-    }
   }, [providers, currentProviderId])
 
   useEffect(() => {
@@ -213,27 +211,39 @@ export default function App() {
     setProviderDraft(current => ({ ...current, [key]: value }))
   }
 
-  function beginCreateProvider() {
-    setCurrentProviderId('')
+  function openCreateModal() {
     setProviderDraft({ id: '', name: '', apiUrl: '', apiKey: '' })
-    setProviderHint('正在新增供应商，填写后点击“保存”。')
-    resetModelState()
+    setProviderModalMode('create')
+    setConnStatus(null)
+    setProviderModalOpen(true)
   }
 
-  function saveProvider() {
+  function openEditModal(provider: ProviderConfig) {
+    setProviderDraft(provider)
+    setProviderModalMode('edit')
+    setConnStatus(null)
+    setProviderModalOpen(true)
+  }
+
+  function closeProviderModal() {
+    setProviderModalOpen(false)
+    setConnStatus(null)
+  }
+
+  function saveProvider(): boolean {
     const name = providerDraft.name.trim()
     const apiUrl = normalizeBaseUrl(providerDraft.apiUrl)
     const apiKey = providerDraft.apiKey.trim()
     if (!name) {
       setConnStatus({ type: 'err', message: '请填写供应商名称' })
-      return
+      return false
     }
     if (!apiUrl) {
       setConnStatus({ type: 'err', message: '请填写 API URL' })
-      return
+      return false
     }
 
-    const id = currentProviderId || makeProviderId()
+    const id = providerModalMode === 'edit' ? providerDraft.id : makeProviderId()
     const nextProvider = { id, name, apiUrl, apiKey }
     setProviders((current) => {
       const index = current.findIndex(item => item.id === id)
@@ -246,22 +256,25 @@ export default function App() {
     })
     setCurrentProviderId(id)
     setConnStatus({ type: 'ok', message: '供应商配置已保存' })
+    return true
   }
 
-  function removeProvider() {
-    if (!currentProviderId) {
-      setConnStatus({ type: 'err', message: '请先选择要删除的供应商' })
-      return
+  function handleSaveProviderModal() {
+    if (saveProvider())
+      setProviderModalOpen(false)
+  }
+
+  function removeProvider(providerId: string) {
+    setProviders(current => current.filter(item => item.id !== providerId))
+    if (currentProviderId === providerId) {
+      setCurrentProviderId('')
+      resetModelState()
     }
-    setProviders(current => current.filter(item => item.id !== currentProviderId))
-    setCurrentProviderId('')
-    setConnStatus({ type: 'ok', message: '供应商配置已删除' })
-    resetModelState()
+    showToast('供应商已删除', 'success')
   }
 
   function onProviderChange(providerId: string) {
     setCurrentProviderId(providerId)
-    setProviderHint(providerId ? '已切换供应商，后续请求会自动带入当前地址与密钥。' : '请选择或新增一个供应商配置，保存后即可使用。')
     resetModelState()
   }
 
@@ -688,418 +701,325 @@ export default function App() {
   function renderWorkspaceView() {
     return (
       <div className="workspace-layout">
-        <div className="workspace-main">
-          <section className="panel spotlight-panel">
-            <div className="panel-kicker">当前上下文</div>
-            <div className="context-strip">
-              <div className="context-card">
-                <span className="context-label">当前供应商</span>
-                <strong>{currentProvider?.name || '未选择供应商'}</strong>
-                <span className="context-sub">{currentProvider?.apiUrl || '请先配置供应商后再拉取模型'}</span>
+        {/* 左栏：控制面板 */}
+        <div className="control-panel">
+          <section className="panel">
+            <div className="panel-heading compact">
+              <div>
+                <h2>模型</h2>
+                <div className="panel-caption">选择供应商后拉取并选择模型。</div>
               </div>
-              <div className="context-card">
-                <span className="context-label">当前模型</span>
-                <strong>{currentModel?.displayName || currentModel?.id || '未选择模型'}</strong>
-                <span className="context-sub">{models.length ? `已加载 ${models.length} 个模型` : '点击拉模型后开始选择'}</span>
-              </div>
-              <div className="context-card">
-                <span className="context-label">工作模式</span>
-                <strong>{mode === 'edit' ? '图生图' : '文生图'}</strong>
-                <span className="context-sub">{mode === 'edit' ? `${refFiles.length} 张参考图已就绪` : '使用文本描述生成画面'}</span>
-              </div>
+              <span className="rail-count">{models.length}</span>
+            </div>
+
+            <div className="provider-select-bar">
+              <select
+                value={currentProviderId}
+                onChange={event => onProviderChange(event.target.value)}
+              >
+                <option value="">请选择供应商</option>
+                {providers.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <button type="button" disabled={!currentProvider} onClick={() => void loadModels()}>
+                拉模型
+              </button>
+            </div>
+
+            {renderStatus(connStatus)}
+
+            <div className="model-list model-list-rail">
+              {!models.length
+                ? (
+                    <div className="empty compact-empty">
+                      <div className="empty-icon">📦</div>
+                      <div className="empty-text">暂无模型</div>
+                      <div className="empty-hint">填写 API 配置后点击"拉模型"</div>
+                    </div>
+                  )
+                : models.map(model => (
+                    <button
+                      key={model.id}
+                      type="button"
+                      className={`model-card ${currentModelId === model.id ? 'active' : ''}`}
+                      onClick={() => selectModel(model.id)}
+                    >
+                      <div className="name">
+                        {model.displayName || model.id}
+                        {model.id === defaultModel ? <span className="badge">默认</span> : null}
+                      </div>
+                      <div className="model-id">{model.id}</div>
+                      <div className="meta">{model.description || ''}</div>
+                      {model.creditPerImage !== undefined
+                        ? (
+                            <div className="tags">
+                              <span className="tag">📝 {model.maxGenerations}张/次</span>
+                              <span className="tag">📎 {model.maxInputImages}张参考图</span>
+                            </div>
+                          )
+                        : null}
+                    </button>
+                  ))}
             </div>
           </section>
 
-          <div className="workspace-stage">
-            <section className="panel model-rail-panel">
-              <div className="panel-heading compact">
-                <div>
-                  <h2>模型轨道</h2>
-                  <div className="panel-caption">先确认当前供应商，再拉取并挑选模型。</div>
-                </div>
-                <span className="rail-count">{models.length}</span>
+          <section className="panel composer-panel">
+            <div className="panel-heading compact">
+              <div>
+                <h2>创作</h2>
+                <div className="panel-caption">填写 Prompt 与生成参数。</div>
               </div>
-
-              <div className="provider-runtime-card condensed">
-                <div className="provider-runtime-copy">
-                  <span className="context-label">当前供应商</span>
-                  <strong>{currentProvider?.name || '未选择供应商'}</strong>
-                  <span className="context-sub">
-                    {currentProvider?.apiUrl || '请前往设置页选择或新增供应商后再开始使用。'}
-                  </span>
-                  <div className="provider-runtime-tags">
-                    <span className="tag">当前使用</span>
-                    <span className="tag">{currentProvider?.apiKey ? '已配置密钥' : '未配置密钥'}</span>
-                  </div>
-                </div>
-                <div className="provider-runtime-actions">
-                  <button className="secondary" type="button" onClick={() => setView('settings')}>管理供应商</button>
-                  <button type="button" disabled={!currentProvider} onClick={() => void loadModels()}>拉模型</button>
-                </div>
+              <div className="composer-state">
+                <span>{mode === 'edit' ? '图生图' : '文生图'}</span>
               </div>
-
-              <div className="small-note">主界面只负责使用当前供应商。供应商新增、编辑、删除与切换已迁移到设置页。</div>
-              {renderStatus(connStatus)}
-
-              <div className="model-list model-list-rail">
-                {!models.length
-                  ? (
-                      <div className="empty compact-empty">
-                        <div className="empty-icon">📦</div>
-                        <div className="empty-text">暂无模型</div>
-                        <div className="empty-hint">填写 API 配置后点击“拉模型”</div>
-                      </div>
-                    )
-                  : models.map(model => (
-                      <button
-                        key={model.id}
-                        type="button"
-                        className={`model-card ${currentModelId === model.id ? 'active' : ''}`}
-                        onClick={() => selectModel(model.id)}
-                      >
-                        <div className="name">
-                          {model.displayName || model.id}
-                          {model.id === defaultModel ? <span className="badge">默认</span> : null}
-                        </div>
-                        <div className="model-id">{model.id}</div>
-                        <div className="meta">{model.description || ''}</div>
-                        {model.creditPerImage !== undefined
-                          ? (
-                              <div className="tags">
-                                <span className="tag">📝 {model.maxGenerations}张/次</span>
-                                <span className="tag">📎 {model.maxInputImages}张参考图</span>
-                              </div>
-                            )
-                          : null}
-                      </button>
-                    ))}
-              </div>
-            </section>
-
-            <div className="workspace-compose-stack">
-              <section className="panel composer-panel">
-                <div className="panel-heading compact">
-                  <div>
-                    <h2>创作面板</h2>
-                    <div className="panel-caption">围绕 Prompt、模式与参数完成本次生成任务。</div>
-                  </div>
-                  <div className="composer-state">
-                    <span>{mode === 'edit' ? '图生图' : '文生图'}</span>
-                    <span>{currentModel?.id || '未选模型'}</span>
-                  </div>
-                </div>
-
-                <div className="composer-brief-grid">
-                  <div className="composer-brief-card primary">
-                    <span className="composer-brief-label">本次任务</span>
-                    <strong>{currentModel?.displayName || currentModel?.id || '等待选择模型'}</strong>
-                    <span className="composer-brief-copy">
-                      {currentProvider ? `${currentProvider.name} 已就绪，可直接开始创作。` : '先前往设置页配置供应商，再回到工作台继续。'}
-                    </span>
-                  </div>
-                  <div className="composer-brief-card">
-                    <span className="composer-brief-label">Prompt 状态</span>
-                    <strong>{prompt.trim() ? `${prompt.trim().length} 字` : '未填写'}</strong>
-                    <span className="composer-brief-copy">
-                      {mode === 'edit' ? `${refFiles.length} 张参考图已载入当前会话。` : '建议先写清主体、构图、光线和风格。'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="mode-switch">
-                  <label className={mode === 'gen' ? 'active' : ''}>
-                    <input type="radio" checked={mode === 'gen'} onChange={() => setMode('gen')} />
-                    ✨ 文生图
-                  </label>
-                  <label className={mode === 'edit' ? 'active' : ''}>
-                    <input type="radio" checked={mode === 'edit'} onChange={() => setMode('edit')} />
-                    🖼 图生图
-                  </label>
-                </div>
-
-                {mode === 'edit'
-                  ? (
-                      <div className="edit-upload">
-                        <label>
-                          参考图
-                          <span className="accent-inline">（上限: {currentModel?.maxInputImages || 0} 张）</span>
-                        </label>
-                        <button className="upload-zone" type="button" onClick={() => fileInputRef.current?.click()}>
-                          <div className="upload-icon">📎</div>
-                          <div className="upload-text">点击上传参考图</div>
-                          <div className="upload-hint">支持多选 · JPG / PNG / WebP</div>
-                        </button>
-                        <input ref={fileInputRef} hidden type="file" accept="image/*" multiple onChange={event => onFileChange(event.target.files)} />
-                        <div className="ref-preview">
-                          {refFiles.map((file, index) => (
-                            <div key={`${file.name}_${index}`} className="ref-item">
-                              <img src={URL.createObjectURL(file)} alt={file.name} />
-                              <button className="ref-remove" type="button" onClick={() => removeRefFile(index)}>✕</button>
-                              <div className="ref-name">{file.name}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  : null}
-
-                <div className="row">
-                  <div>
-                    <label htmlFor="prompt">Prompt</label>
-                    <textarea
-                      id="prompt"
-                      value={prompt}
-                      placeholder="输入你想生成的画面描述，Ctrl + Enter 可直接提交"
-                      onChange={event => setPrompt(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.ctrlKey && event.key === 'Enter')
-                          void generate()
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div className="param-grid">
-                  <div className="fixed-n">
-                    <label htmlFor="n">数量 <span className="muted">{currentModel ? `(≤${currentModel.maxGenerations})` : ''}</span></label>
-                    <input
-                      id="n"
-                      type="number"
-                      min={1}
-                      max={currentModel?.maxGenerations || 1}
-                      value={params.n}
-                      onChange={event => setParams(current => ({ ...current, n: Number(event.target.value || 1) }))}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="sizeSelect">尺寸 <span className="muted">{currentModel?.sizeFormat ? `(${currentModel.sizeFormat})` : ''}</span></label>
-                    <select id="sizeSelect" value={params.size} onChange={event => setParams(current => ({ ...current, size: event.target.value }))}>
-                      {filteredSizeOptions.length
-                        ? filteredSizeOptions.map(size => <option key={size} value={size}>{size}</option>)
-                        : <option value="">默认</option>}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="quality">质量</label>
-                    <select id="quality" value={params.quality} onChange={event => setParams(current => ({ ...current, quality: event.target.value }))}>
-                      <option value="auto">auto</option>
-                      <option value="low">low</option>
-                      <option value="medium">medium</option>
-                      <option value="high">high</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="autoPrompt">自动补全</label>
-                    <select id="autoPrompt" value={params.autoPrompt} onChange={event => setParams(current => ({ ...current, autoPrompt: event.target.value }))}>
-                      <option value="false">false</option>
-                      <option value="true">true</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="translate">自动翻译</label>
-                    <select id="translate" value={params.translate} onChange={event => setParams(current => ({ ...current, translate: event.target.value }))}>
-                      <option value="false">false</option>
-                      <option value="true">true</option>
-                    </select>
-                  </div>
-                  {currentModel?.hasResolution && resolutionOptions.length
-                    ? (
-                        <div>
-                          <label htmlFor="resolution">分辨率</label>
-                          <select id="resolution" value={params.resolution || ''} onChange={event => setParams(current => ({ ...current, resolution: event.target.value }))}>
-                            {resolutionOptions.map(value => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </div>
-                      )
-                    : null}
-                </div>
-
-                {sizeOptions.length > 0
-                  ? (
-                      <div className="size-grid-wrap">
-                        <label>尺寸筛选</label>
-                        <div className="size-filter-bar">
-                          <button type="button" className={`chip ${sizeFilter === 'all' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('all')}>全部</button>
-                          <button type="button" className={`chip ${sizeFilter === 'square' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('square')}>方图</button>
-                          <button type="button" className={`chip ${sizeFilter === 'landscape' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('landscape')}>横图</button>
-                          <button type="button" className={`chip ${sizeFilter === 'portrait' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('portrait')}>竖图</button>
-                          <button type="button" className={`chip ${sizeFilter === 'ultrawide' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('ultrawide')}>超宽</button>
-                        </div>
-                        <label>尺寸快选</label>
-                        <div className="size-grid">
-                          {filteredSizeOptions.map(size => (
-                            <label key={size}>
-                              <input type="radio" checked={params.size === size} onChange={() => setParams(current => ({ ...current, size }))} />
-                              <span>{size}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  : null}
-
-                <div className="composer-checklist">
-                  <span className={`composer-check-item ${currentProvider ? 'ready' : ''}`}>供应商</span>
-                  <span className={`composer-check-item ${currentModel ? 'ready' : ''}`}>模型</span>
-                  <span className={`composer-check-item ${prompt.trim() ? 'ready' : ''}`}>Prompt</span>
-                  <span className={`composer-check-item ${mode === 'gen' || refFiles.length ? 'ready' : ''}`}>参考图</span>
-                </div>
-
-                <div className="generate-bar">
-                  <div className="generate-hint">
-                    <strong>{currentModel?.displayName || '尚未选择模型'}</strong>
-                    <span>{prompt.trim() ? `Prompt 已填写 ${prompt.trim().length} 字` : '填写 Prompt 后即可开始生成'}</span>
-                  </div>
-                  <button className="generate-btn" type="button" disabled={!currentModel || isGenerating} onClick={() => void generate()}>
-                    {mode === 'edit' ? '生成图片（图生图）' : '生成图片'}
-                  </button>
-                </div>
-                {renderStatus(genStatus)}
-              </section>
-
-              <section className="panel service-panel">
-                <div className="panel-heading compact">
-                  <div>
-                    <h2>结果处理服务</h2>
-                    <div className="panel-caption">放大服务仍保留在工作台中，方便对当前结果直接处理。</div>
-                  </div>
-                </div>
-                <div className="row">
-                  <div>
-                    <label htmlFor="upscaleUrl">放大服务 URL</label>
-                    <input
-                      id="upscaleUrl"
-                      value={upscaleConfig.apiUrl}
-                      placeholder="https://your-upscale.com/upscale"
-                      onChange={event => setUpscaleConfig(current => ({ ...current, apiUrl: event.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="upscaleKey">放大服务 Key</label>
-                    <input
-                      id="upscaleKey"
-                      type="password"
-                      value={upscaleConfig.apiKey}
-                      placeholder="可选"
-                      onChange={event => setUpscaleConfig(current => ({ ...current, apiKey: event.target.value }))}
-                    />
-                  </div>
-                </div>
-              </section>
             </div>
-          </div>
+
+            <div className="mode-switch">
+              <label className={mode === 'gen' ? 'active' : ''}>
+                <input type="radio" checked={mode === 'gen'} onChange={() => setMode('gen')} />
+                ✨ 文生图
+              </label>
+              <label className={mode === 'edit' ? 'active' : ''}>
+                <input type="radio" checked={mode === 'edit'} onChange={() => setMode('edit')} />
+                🖼 图生图
+              </label>
+            </div>
+
+            {mode === 'edit'
+              ? (
+                  <div className="edit-upload">
+                    <label>
+                      参考图
+                      <span className="accent-inline">（上限: {currentModel?.maxInputImages || 0} 张）</span>
+                    </label>
+                    <button className="upload-zone" type="button" onClick={() => fileInputRef.current?.click()}>
+                      <div className="upload-icon">📎</div>
+                      <div className="upload-text">点击上传参考图</div>
+                      <div className="upload-hint">支持多选 · JPG / PNG / WebP</div>
+                    </button>
+                    <input ref={fileInputRef} hidden type="file" accept="image/*" multiple onChange={event => onFileChange(event.target.files)} />
+                    <div className="ref-preview">
+                      {refFiles.map((file, index) => (
+                        <div key={`${file.name}_${index}`} className="ref-item">
+                          <img src={URL.createObjectURL(file)} alt={file.name} />
+                          <button className="ref-remove" type="button" onClick={() => removeRefFile(index)}>✕</button>
+                          <div className="ref-name">{file.name}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              : null}
+
+            <div className="row">
+              <div>
+                <label htmlFor="prompt">Prompt</label>
+                <textarea
+                  id="prompt"
+                  value={prompt}
+                  placeholder="输入你想生成的画面描述，Ctrl + Enter 可直接提交"
+                  onChange={event => setPrompt(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.ctrlKey && event.key === 'Enter')
+                      void generate()
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="param-grid">
+              <div className="fixed-n">
+                <label htmlFor="n">数量 <span className="muted">{currentModel ? `(≤${currentModel.maxGenerations})` : ''}</span></label>
+                <input
+                  id="n"
+                  type="number"
+                  min={1}
+                  max={currentModel?.maxGenerations || 1}
+                  value={params.n}
+                  onChange={event => setParams(current => ({ ...current, n: Number(event.target.value || 1) }))}
+                />
+              </div>
+              <div>
+                <label htmlFor="sizeSelect">尺寸 <span className="muted">{currentModel?.sizeFormat ? `(${currentModel.sizeFormat})` : ''}</span></label>
+                <select id="sizeSelect" value={params.size} onChange={event => setParams(current => ({ ...current, size: event.target.value }))}>
+                  {filteredSizeOptions.length
+                    ? filteredSizeOptions.map(size => <option key={size} value={size}>{size}</option>)
+                    : <option value="">默认</option>}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="quality">质量</label>
+                <select id="quality" value={params.quality} onChange={event => setParams(current => ({ ...current, quality: event.target.value }))}>
+                  <option value="auto">auto</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="autoPrompt">自动补全</label>
+                <select id="autoPrompt" value={params.autoPrompt} onChange={event => setParams(current => ({ ...current, autoPrompt: event.target.value }))}>
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="translate">自动翻译</label>
+                <select id="translate" value={params.translate} onChange={event => setParams(current => ({ ...current, translate: event.target.value }))}>
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+              {currentModel?.hasResolution && resolutionOptions.length
+                ? (
+                    <div>
+                      <label htmlFor="resolution">分辨率</label>
+                      <select id="resolution" value={params.resolution || ''} onChange={event => setParams(current => ({ ...current, resolution: event.target.value }))}>
+                        {resolutionOptions.map(value => <option key={value} value={value}>{value}</option>)}
+                      </select>
+                    </div>
+                  )
+                : null}
+            </div>
+
+            {sizeOptions.length > 0
+              ? (
+                  <div className="size-grid-wrap">
+                    <label>尺寸筛选</label>
+                    <div className="size-filter-bar">
+                      <button type="button" className={`chip ${sizeFilter === 'all' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('all')}>全部</button>
+                      <button type="button" className={`chip ${sizeFilter === 'square' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('square')}>方图</button>
+                      <button type="button" className={`chip ${sizeFilter === 'landscape' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('landscape')}>横图</button>
+                      <button type="button" className={`chip ${sizeFilter === 'portrait' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('portrait')}>竖图</button>
+                      <button type="button" className={`chip ${sizeFilter === 'ultrawide' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('ultrawide')}>超宽</button>
+                    </div>
+                    <label>尺寸快选</label>
+                    <div className="size-grid">
+                      {filteredSizeOptions.map(size => (
+                        <label key={size}>
+                          <input type="radio" checked={params.size === size} onChange={() => setParams(current => ({ ...current, size }))} />
+                          <span>{size}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )
+              : null}
+
+            <div className="composer-checklist">
+              <span className={`composer-check-item ${currentProvider ? 'ready' : ''}`}>供应商</span>
+              <span className={`composer-check-item ${currentModel ? 'ready' : ''}`}>模型</span>
+              <span className={`composer-check-item ${prompt.trim() ? 'ready' : ''}`}>Prompt</span>
+              <span className={`composer-check-item ${mode === 'gen' || refFiles.length ? 'ready' : ''}`}>参考图</span>
+            </div>
+
+            <div className="generate-bar">
+              <div className="generate-hint">
+                <strong>{currentModel?.displayName || '尚未选择模型'}</strong>
+                <span>{prompt.trim() ? `Prompt 已填写 ${prompt.trim().length} 字` : '填写 Prompt 后即可开始生成'}</span>
+              </div>
+              <button className="generate-btn" type="button" disabled={!currentModel || isGenerating} onClick={() => void generate()}>
+                {mode === 'edit' ? '生成图片（图生图）' : '生成图片'}
+              </button>
+            </div>
+            {renderStatus(genStatus)}
+          </section>
         </div>
 
-        <div className="workspace-side">
-          <section className="panel result-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>当前结果</h2>
-                <div className="panel-caption">生成结果会集中展示在这里，方便连续预览和处理。</div>
-              </div>
-              <div className="result-meta-badge">
-                <span>{results.length} 张</span>
-                <span>{resultTimer || '待生成'}</span>
-              </div>
+        {/* 右栏：画布区 */}
+        <div className="canvas-panel">
+          <div className="canvas-header">
+            <div className="canvas-meta-bar">
+              <span className="canvas-title">
+                {isGenerating ? '生成中' : results.length ? `${results.length} 张结果` : '等待生成'}
+              </span>
+              <span className="canvas-timer">{resultTimer}</span>
             </div>
+          </div>
 
-            <div className="result-overview-strip">
-              <div className="result-overview-card">
-                <span className="result-overview-label">生成状态</span>
-                <strong>{isGenerating ? '处理中' : results.length ? '已完成' : '待命'}</strong>
-                <span>{genStatus?.message || '结果将稳定展示在此区域。'}</span>
-              </div>
-              <div className="result-overview-card">
-                <span className="result-overview-label">当前模型</span>
-                <strong>{currentModel?.id || '-'}</strong>
-                <span>{mode === 'edit' ? '支持继续放大和回看结果。' : '生成后可下载、复制和提升分辨率。'}</span>
-              </div>
-            </div>
-
-            <div className="results">
-              {isGenerating && loadingCount > 0
-                ? Array.from({ length: loadingCount }).map((_, index) => (
-                    <div key={index} className="skeleton-card">
-                      <div className="skeleton-bar" style={{ width: '60%', height: 14, marginBottom: 10 }} />
-                      <div className="skeleton-bar img" />
-                    </div>
-                  ))
-                : !results.length
-                    ? (
-                        <div className="empty">
-                          <div className="empty-icon">🎨</div>
-                          <div className="empty-text">等待生成</div>
-                          <div className="empty-hint">选择模型并填写参数后点击“生成图片”，当前结果会在这里形成连续画廊。</div>
-                        </div>
-                      )
-                    : results.map((image, index) => {
-                        const source = image.b64_json ? `data:image/png;base64,${image.b64_json}` : image.url || ''
-                        return (
-                          <div key={`${source}_${index}`} className="result-item">
-                            <div className="info">
-                              <span className="info-left">
-                                <span className="info-tag">#{index + 1}</span>
-                                <span>{image.b64_json ? 'base64' : 'url'}</span>
-                                <span>{resultTimer || '-'}</span>
-                                <span className="accent-text">{currentModel?.id || '-'}</span>
-                              </span>
-                              <span className="img-size">{imageSizes[index] || '计算中...'}</span>
+          <div className={`results-grid ${results.length > 1 ? 'multi' : ''}`}>
+            {isGenerating && loadingCount > 0
+              ? Array.from({ length: loadingCount }).map((_, index) => (
+                  <div key={index} className="skeleton-card">
+                    <div className="skeleton-bar" style={{ width: '60%', height: 14, marginBottom: 10 }} />
+                    <div className="skeleton-bar img" />
+                  </div>
+                ))
+              : !results.length
+                  ? (
+                      <div className="empty">
+                        <div className="empty-icon">🎨</div>
+                        <div className="empty-text">等待生成</div>
+                        <div className="empty-hint">选择模型并填写参数后点击"生成图片"</div>
+                      </div>
+                    )
+                  : results.map((image, index) => {
+                      const source = image.b64_json ? `data:image/png;base64,${image.b64_json}` : image.url || ''
+                      return (
+                        <div key={`${source}_${index}`} className="result-item">
+                          <div className="info">
+                            <span className="info-left">
+                              <span className="info-tag">#{index + 1}</span>
+                              <span>{image.b64_json ? 'base64' : 'url'}</span>
+                              <span className="accent-text">{currentModel?.id || '-'}</span>
+                            </span>
+                            <span className="img-size">{imageSizes[index] || '计算中...'}</span>
+                          </div>
+                          {source
+                            ? (
+                                <div className="result-img-wrap">
+                                  <img
+                                    className="result-img"
+                                    src={source}
+                                    alt={`结果 ${index + 1}`}
+                                    loading="lazy"
+                                    onClick={() => setPreviewImage(source)}
+                                    onLoad={(event) => {
+                                      const target = event.currentTarget
+                                      setImageSizes(current => ({ ...current, [index]: `${target.naturalWidth} × ${target.naturalHeight}px` }))
+                                    }}
+                                  />
+                                </div>
+                              )
+                            : (
+                                <div className="empty" style={{ padding: 20 }}>
+                                  <div className="empty-text">未返回图片数据</div>
+                                </div>
+                              )}
+                          <div className="result-actions">
+                            <div className="result-primary-actions">
+                              <button className={`dl-btn ${downloadedIndex === index ? 'downloaded' : ''}`} type="button" onClick={() => void handleDownload(index)}>
+                                {downloadedIndex === index ? '已下载' : '下载图片'}
+                              </button>
+                              <button className="dl-btn" type="button" onClick={() => void handleCopy(index)}>
+                                {copiedIndex === index ? '已复制' : '复制 Base64'}
+                              </button>
                             </div>
-                            {source
+                            {image.b64_json
                               ? (
-                                  <div className="result-img-wrap">
-                                    <img
-                                      className="result-img"
-                                      src={source}
-                                      alt={`结果 ${index + 1}`}
-                                      loading="lazy"
-                                      onClick={() => setPreviewImage(source)}
-                                      onLoad={(event) => {
-                                        const target = event.currentTarget
-                                        setImageSizes(current => ({ ...current, [index]: `${target.naturalWidth} × ${target.naturalHeight}px` }))
-                                      }}
-                                    />
+                                  <div className="result-upscale-row">
+                                    <div className="result-upscale-chips">
+                                      <button type="button" className={`chip ${upscaleFactor === 2 ? 'active' : ''}`} onClick={() => setUpscaleFactor(2)}>2x</button>
+                                      <button type="button" className={`chip ${upscaleFactor === 4 ? 'active' : ''}`} onClick={() => setUpscaleFactor(4)}>4x</button>
+                                    </div>
+                                    <button
+                                      className="dl-btn result-upscale-btn"
+                                      type="button"
+                                      disabled={!normalizeBaseUrl(upscaleConfig.apiUrl) || upscalingIndex !== null}
+                                      title={!normalizeBaseUrl(upscaleConfig.apiUrl) ? '请先在设置页配置放大服务' : ''}
+                                      onClick={() => void handleUpscale(index)}
+                                    >
+                                      {upscalingIndex === index ? '放大中…' : '提升分辨率'}
+                                    </button>
                                   </div>
                                 )
-                              : (
-                                  <div className="empty" style={{ padding: 20 }}>
-                                    <div className="empty-text">未返回图片数据</div>
-                                  </div>
-                                )}
-                            <div className="result-actions">
-                              <div className="result-primary-actions">
-                                <button className={`dl-btn ${downloadedIndex === index ? 'downloaded' : ''}`} type="button" onClick={() => void handleDownload(index)}>
-                                  {downloadedIndex === index ? '已下载' : '下载图片'}
-                                </button>
-                                <button className="dl-btn" type="button" onClick={() => void handleCopy(index)}>
-                                  {copiedIndex === index ? '已复制' : '复制 Base64'}
-                                </button>
-                              </div>
-                              {image.b64_json
-                                ? (
-                                    <div className="result-upscale-row">
-                                      <div className="result-upscale-chips">
-                                        <button type="button" className={`chip ${upscaleFactor === 2 ? 'active' : ''}`} onClick={() => setUpscaleFactor(2)}>2x</button>
-                                        <button type="button" className={`chip ${upscaleFactor === 4 ? 'active' : ''}`} onClick={() => setUpscaleFactor(4)}>4x</button>
-                                      </div>
-                                      <button
-                                        className="dl-btn result-upscale-btn"
-                                        type="button"
-                                        disabled={!normalizeBaseUrl(upscaleConfig.apiUrl) || upscalingIndex !== null}
-                                        title={!normalizeBaseUrl(upscaleConfig.apiUrl) ? '请先配置放大服务' : ''}
-                                        onClick={() => void handleUpscale(index)}
-                                      >
-                                        {upscalingIndex === index ? '放大中…' : '提升分辨率'}
-                                      </button>
-                                    </div>
-                                  )
-                                : null}
-                            </div>
+                              : null}
                           </div>
-                        )
-                      })}
-            </div>
-          </section>
+                        </div>
+                      )
+                    })}
+          </div>
 
           <details className="panel request-panel">
             <summary>上次请求 JSON</summary>
@@ -1140,97 +1060,85 @@ export default function App() {
         </section>
 
         <div className="settings-grid">
-        <section className="panel settings-panel">
+        <section className="panel settings-panel provider-section">
           <div className="panel-heading">
             <div>
               <h2>供应商管理</h2>
-              <div className="panel-caption">集中管理供应商增删改选，并决定工作台当前使用的供应商。</div>
+              <div className="panel-caption">管理 API 供应商配置，工作台下拉框可随时切换使用中的供应商。</div>
             </div>
+            <button type="button" onClick={openCreateModal}>+ 新增供应商</button>
           </div>
-          <div className="provider-settings-layout">
-            <div className="settings-summary-list">
-              <div className="settings-summary-row">
-                <span>当前供应商</span>
-                <strong>{currentProvider?.name || '未配置'}</strong>
-              </div>
-              <div className="settings-summary-row">
-                <span>供应商数量</span>
-                <strong>{providers.length}</strong>
-              </div>
-              <div className="settings-summary-row">
-                <span>工作区入口</span>
-                <button className="secondary" type="button" onClick={() => setView('workspace')}>返回工作台</button>
-              </div>
-            </div>
 
-            <div className="provider-settings-form settings-surface">
-              <div className="settings-form-kicker">Provider Editor</div>
-              <div className="row">
-                <div style={{ flex: '0 0 240px' }}>
-                  <label htmlFor="providerSelect">供应商</label>
-                  <select id="providerSelect" value={currentProviderId} onChange={event => onProviderChange(event.target.value)}>
-                    <option value="">请选择供应商</option>
-                    {providers.map(provider => (
-                      <option key={provider.id} value={provider.id}>{provider.name}</option>
-                    ))}
-                  </select>
+          {providers.length === 0
+            ? (
+                <div className="empty" style={{ padding: '32px 0' }}>
+                  <div className="empty-icon">🔌</div>
+                  <div className="empty-text">暂无供应商配置</div>
+                  <div className="empty-hint">点击右上角"+ 新增供应商"开始配置</div>
                 </div>
-                <div style={{ flex: '0 0 100px' }}>
-                  <label>&nbsp;</label>
-                  <button className="secondary full" type="button" onClick={beginCreateProvider}>新增</button>
+              )
+            : (
+                <div className="provider-list">
+                  {providers.map(p => (
+                    <div key={p.id} className={`provider-list-row${p.id === currentProviderId ? ' active' : ''}`}>
+                      <div
+                        className="provider-list-main"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => onProviderChange(p.id)}
+                        onKeyDown={e => e.key === 'Enter' && onProviderChange(p.id)}
+                      >
+                        <div className="provider-list-name">{p.name}</div>
+                        <div className="provider-list-url">{p.apiUrl || '未填写 URL'}</div>
+                      </div>
+                      <div className="provider-list-meta">
+                        {p.id === currentProviderId && <span className="badge-in-use">使用中</span>}
+                        {p.apiKey ? <span className="badge-key">已配密钥</span> : null}
+                      </div>
+                      <div className="provider-list-actions">
+                        <button className="secondary" type="button" onClick={() => openEditModal(p)}>编辑</button>
+                        <button className="secondary danger" type="button" onClick={() => removeProvider(p.id)}>删除</button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div style={{ flex: '0 0 100px' }}>
-                  <label>&nbsp;</label>
-                  <button className="secondary full" type="button" onClick={saveProvider}>保存</button>
-                </div>
-                <div style={{ flex: '0 0 100px' }}>
-                  <label>&nbsp;</label>
-                  <button className="secondary full" type="button" onClick={removeProvider}>删除</button>
-                </div>
-              </div>
-              <div className="row">
-                <div>
-                  <label htmlFor="providerName">供应商名称</label>
-                  <input id="providerName" value={providerDraft.name} placeholder="例如：供应商 A" onChange={event => updateProviderDraft('name', event.target.value)} />
-                </div>
-              </div>
-              <div className="row">
-                <div>
-                  <label htmlFor="apiUrl">API URL</label>
-                  <input id="apiUrl" value={providerDraft.apiUrl} placeholder="https://your-api.com" onChange={event => updateProviderDraft('apiUrl', event.target.value)} />
-                </div>
-              </div>
-              <div className="row">
-                <div>
-                  <label htmlFor="apiKey">API Key</label>
-                  <input id="apiKey" type="password" value={providerDraft.apiKey} placeholder="sk-xxxxx" onChange={event => updateProviderDraft('apiKey', event.target.value)} />
-                </div>
-              </div>
-              <div className="small-note">{providerHint}</div>
-              {renderStatus(connStatus)}
-            </div>
-          </div>
+              )}
         </section>
 
         <section className="panel settings-panel">
           <div className="panel-heading">
             <div>
               <h2>放大服务</h2>
-              <div className="panel-caption">当前放大能力状态一览，下一步会并入完整设置管理流。</div>
+              <div className="panel-caption">配置用于提升图片分辨率的自建放大服务端点。</div>
+            </div>
+          </div>
+          <div className="row">
+            <div>
+              <label htmlFor="upscaleUrl">服务地址</label>
+              <input
+                id="upscaleUrl"
+                value={upscaleConfig.apiUrl}
+                placeholder="https://your-upscale.com/upscale"
+                onChange={event => setUpscaleConfig(current => ({ ...current, apiUrl: event.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="row">
+            <div>
+              <label htmlFor="upscaleKey">访问密钥</label>
+              <input
+                id="upscaleKey"
+                type="password"
+                value={upscaleConfig.apiKey}
+                placeholder="可选"
+                onChange={event => setUpscaleConfig(current => ({ ...current, apiKey: event.target.value }))}
+              />
             </div>
           </div>
           <div className="settings-summary-list">
             <div className="settings-summary-row">
-              <span>服务地址</span>
-              <strong>{upscaleConfig.apiUrl || '未配置'}</strong>
-            </div>
-            <div className="settings-summary-row">
-              <span>密钥状态</span>
-              <strong>{upscaleConfig.apiKey ? '已配置' : '未配置'}</strong>
-            </div>
-            <div className="settings-summary-row">
-              <span>工作区入口</span>
-              <button className="secondary" type="button" onClick={() => setView('workspace')}>前往工作台</button>
+              <span>服务状态</span>
+              <strong>{upscaleConfig.apiUrl ? '已配置' : '未配置'}</strong>
             </div>
           </div>
         </section>
@@ -1388,6 +1296,59 @@ export default function App() {
         <button className="modal-close" type="button" onClick={() => setPreviewImage('')}>✕</button>
         {previewImage ? <img src={previewImage} alt="预览" onClick={event => event.stopPropagation()} /> : null}
       </div>
+
+      {providerModalOpen && (
+        <div className="provider-modal-overlay" onClick={closeProviderModal}>
+          <div className="provider-modal-dialog" onClick={event => event.stopPropagation()}>
+            <div className="provider-modal-header">
+              <h3>{providerModalMode === 'create' ? '新增供应商' : '编辑供应商'}</h3>
+              <button className="provider-modal-close" type="button" onClick={closeProviderModal}>✕</button>
+            </div>
+            <div className="provider-modal-body">
+              <div className="row">
+                <div>
+                  <label htmlFor="modalProviderName">供应商名称</label>
+                  <input
+                    id="modalProviderName"
+                    value={providerDraft.name}
+                    placeholder="例如：供应商 A"
+                    autoFocus
+                    onChange={event => updateProviderDraft('name', event.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="row">
+                <div>
+                  <label htmlFor="modalApiUrl">API URL</label>
+                  <input
+                    id="modalApiUrl"
+                    value={providerDraft.apiUrl}
+                    placeholder="https://your-api.com"
+                    onChange={event => updateProviderDraft('apiUrl', event.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="row">
+                <div>
+                  <label htmlFor="modalApiKey">API Key</label>
+                  <input
+                    id="modalApiKey"
+                    type="password"
+                    value={providerDraft.apiKey}
+                    placeholder="sk-xxxxx（可选）"
+                    onChange={event => updateProviderDraft('apiKey', event.target.value)}
+                  />
+                </div>
+              </div>
+              {renderStatus(connStatus)}
+            </div>
+            <div className="provider-modal-footer">
+              <button className="secondary" type="button" onClick={closeProviderModal}>取消</button>
+              <button type="button" onClick={handleSaveProviderModal}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className={`toast ${toast ? `show ${toast.type}` : ''}`}>{toast?.message}</div>
     </>
