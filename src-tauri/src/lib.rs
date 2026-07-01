@@ -8,7 +8,7 @@ use sha1::Sha1;
 use std::{
     collections::BTreeMap,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -141,6 +141,8 @@ struct HistoryRecordPayload {
     duration: String,
     request_json: String,
     total_size: i64,
+    #[serde(default)]
+    upscale_images_base64: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Default for AppConfig {
@@ -248,6 +250,17 @@ fn open_history_db(app: &AppHandle) -> Result<Connection, String> {
       ",
         )
         .map_err(|error| error.to_string())?;
+    match connection.execute(
+        "ALTER TABLE history_records ADD COLUMN upscale_images_json TEXT NOT NULL DEFAULT '{}'",
+        [],
+    ) {
+        Ok(_) => {}
+        Err(error) => {
+            if !error.to_string().contains("duplicate column name") {
+                return Err(error.to_string());
+            }
+        }
+    }
 
     Ok(connection)
 }
@@ -291,6 +304,10 @@ fn save_history_images(
 
 fn delete_history_images(app: &AppHandle, images_json: &str) -> Result<(), String> {
     let relative_paths: Vec<String> = serde_json::from_str(images_json).unwrap_or_default();
+    delete_relative_paths(app, relative_paths)
+}
+
+fn delete_relative_paths(app: &AppHandle, relative_paths: Vec<String>) -> Result<(), String> {
     let root_dir = history_root_dir(app)?;
     for relative_path in relative_paths {
         let absolute_path = root_dir.join(relative_path);
@@ -299,6 +316,31 @@ fn delete_history_images(app: &AppHandle, images_json: &str) -> Result<(), Strin
         }
     }
     Ok(())
+}
+
+fn upscale_paths_from_json(upscale_images_json: &str) -> Vec<String> {
+    let variants: BTreeMap<String, BTreeMap<String, String>> =
+        serde_json::from_str(upscale_images_json).unwrap_or_default();
+    variants
+        .values()
+        .flat_map(|item| item.values().cloned())
+        .collect()
+}
+
+fn normalize_relative_path(relative_path: &str) -> Option<String> {
+    let path = Path::new(relative_path);
+    if path.is_absolute() {
+        return None;
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) {
+        return None;
+    }
+    Some(relative_path.replace('\\', "/"))
 }
 
 fn read_history_images(app: &AppHandle, images_json: &str) -> Result<Vec<String>, String> {
@@ -315,15 +357,41 @@ fn read_history_images(app: &AppHandle, images_json: &str) -> Result<Vec<String>
     Ok(images_base64)
 }
 
+fn read_upscale_images(
+    app: &AppHandle,
+    upscale_images_json: &str,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
+    let relative_paths: BTreeMap<String, BTreeMap<String, String>> =
+        serde_json::from_str(upscale_images_json).unwrap_or_default();
+    let root_dir = history_root_dir(app)?;
+    let mut images_base64 = BTreeMap::new();
+
+    for (image_index, variants) in relative_paths {
+        let mut base64_variants = BTreeMap::new();
+        for (factor, relative_path) in variants {
+            let absolute_path = root_dir.join(relative_path);
+            let bytes = fs::read(&absolute_path).map_err(|error| error.to_string())?;
+            base64_variants.insert(factor, STANDARD.encode(bytes));
+        }
+        images_base64.insert(image_index, base64_variants);
+    }
+
+    Ok(images_base64)
+}
+
 fn row_to_history_payload(
     app: &AppHandle,
     row: &rusqlite::Row<'_>,
 ) -> Result<HistoryRecordPayload, String> {
     let params_json: String = row.get("params_json").map_err(|error| error.to_string())?;
     let images_json: String = row.get("images_json").map_err(|error| error.to_string())?;
+    let upscale_images_json: String = row
+        .get("upscale_images_json")
+        .map_err(|error| error.to_string())?;
     let params =
         serde_json::from_str::<RequestParams>(&params_json).map_err(|error| error.to_string())?;
     let images_base64 = read_history_images(app, &images_json)?;
+    let upscale_images_base64 = read_upscale_images(app, &upscale_images_json)?;
 
     Ok(HistoryRecordPayload {
         id: row.get("id").map_err(|error| error.to_string())?,
@@ -342,6 +410,7 @@ fn row_to_history_payload(
         duration: row.get("duration").map_err(|error| error.to_string())?,
         request_json: row.get("request_json").map_err(|error| error.to_string())?,
         total_size: row.get("total_size").map_err(|error| error.to_string())?,
+        upscale_images_base64,
     })
 }
 
@@ -397,14 +466,18 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
     let image_paths = save_history_images(&app, record.timestamp, &record.images_base64)?;
     let params_json = serde_json::to_string(&record.params).map_err(|error| error.to_string())?;
     let images_json = serde_json::to_string(&image_paths).map_err(|error| error.to_string())?;
+    let upscale_images_json =
+        serde_json::to_string(&BTreeMap::<String, BTreeMap<String, String>>::new())
+            .map_err(|error| error.to_string())?;
 
     connection
         .execute(
             "
       INSERT INTO history_records (
         timestamp, provider_id, provider_name, mode, model_id, model_name,
-        prompt, params_json, images_json, image_count, duration, request_json, total_size
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        prompt, params_json, images_json, image_count, duration, request_json, total_size,
+        upscale_images_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ",
             params![
                 record.timestamp,
@@ -420,11 +493,95 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
                 record.duration,
                 record.request_json,
                 record.total_size,
+                upscale_images_json,
             ],
         )
         .map_err(|error| error.to_string())?;
 
     Ok(connection.last_insert_rowid())
+}
+
+#[tauri::command]
+fn save_history_upscale_variant(
+    app: AppHandle,
+    record_id: i64,
+    image_index: i64,
+    factor: i64,
+    image_base64: String,
+    local_path: Option<String>,
+) -> Result<(), String> {
+    if !(2..=4).contains(&factor) {
+        return Err("超分倍率必须为 2、3 或 4".into());
+    }
+
+    let connection = open_history_db(&app)?;
+    let upscale_images_json = connection
+        .query_row(
+            "SELECT upscale_images_json FROM history_records WHERE id = ? LIMIT 1",
+            params![record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "历史记录不存在".to_string())?;
+
+    let mut variants: BTreeMap<String, BTreeMap<String, String>> =
+        serde_json::from_str(&upscale_images_json).unwrap_or_default();
+    let root_dir = history_root_dir(&app)?;
+    let existing_relative_path = local_path
+        .as_deref()
+        .and_then(normalize_relative_path)
+        .filter(|relative_path| root_dir.join(relative_path).exists());
+    let next_relative_path = if let Some(relative_path) = existing_relative_path {
+        relative_path
+    } else {
+        let bytes = STANDARD
+            .decode(&image_base64)
+            .map_err(|error| error.to_string())?;
+        let timestamp = now_millis() as i64;
+        let image_dir = history_images_dir(&app, timestamp)?;
+        let file_name = format!(
+            "{}_record_{}_{}_{}x.png",
+            timestamp,
+            record_id,
+            image_index + 1,
+            factor
+        );
+        let dir_name = image_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("default");
+        let relative_path = format!("images/{}/{}", dir_name, file_name).replace('\\', "/");
+        fs::write(image_dir.join(&file_name), bytes).map_err(|error| error.to_string())?;
+        relative_path
+    };
+
+    let image_key = image_index.to_string();
+    let factor_key = factor.to_string();
+    let previous_path = variants
+        .get(&image_key)
+        .and_then(|item| item.get(&factor_key))
+        .cloned();
+    variants
+        .entry(image_key)
+        .or_default()
+        .insert(factor_key, next_relative_path.clone());
+
+    let next_json = serde_json::to_string(&variants).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE history_records SET upscale_images_json = ? WHERE id = ?",
+            params![next_json, record_id],
+        )
+        .map_err(|error| error.to_string())?;
+
+    if let Some(previous_path) = previous_path {
+        if previous_path != next_relative_path {
+            delete_relative_paths(&app, vec![previous_path])?;
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -473,10 +630,12 @@ fn get_history_record(app: AppHandle, id: i64) -> Result<Option<HistoryRecordPay
 fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
     let connection = open_history_db(&app)?;
     let mut statement = connection
-        .prepare("SELECT images_json FROM history_records WHERE id = ? LIMIT 1")
+        .prepare("SELECT images_json, upscale_images_json FROM history_records WHERE id = ? LIMIT 1")
         .map_err(|error| error.to_string())?;
-    let images_json = statement
-        .query_row(params![id], |row| row.get::<_, String>(0))
+    let paths_json = statement
+        .query_row(params![id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .optional()
         .map_err(|error| error.to_string())?;
 
@@ -484,8 +643,9 @@ fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
         .execute("DELETE FROM history_records WHERE id = ?", params![id])
         .map_err(|error| error.to_string())?;
 
-    if let Some(images_json) = images_json {
+    if let Some((images_json, upscale_images_json)) = paths_json {
         delete_history_images(&app, &images_json)?;
+        delete_relative_paths(&app, upscale_paths_from_json(&upscale_images_json))?;
     }
 
     Ok(())
@@ -545,6 +705,10 @@ const IMAGEENHAN_API_VERSION: &str = "2019-09-30";
 const OPENPLATFORM_ENDPOINT: &str = "openplatform.aliyuncs.com";
 const OPENPLATFORM_API_VERSION: &str = "2019-12-19";
 const ALIYUN_REGION_ID: &str = "cn-shanghai";
+const ALIYUN_UPSCALE_MAX_BYTES: usize = 20 * 1024 * 1024;
+const ALIYUN_UPSCALE_MIN_SIDE: u32 = 64;
+const ALIYUN_UPSCALE_MAX_LONG_SIDE: u32 = 5000;
+const ALIYUN_UPSCALE_MAX_ASPECT_RATIO: f64 = 2.0;
 
 // RFC 3986 percent-encode，仅保留 unreserved chars
 fn percent_encode(s: &str) -> String {
@@ -559,7 +723,6 @@ fn percent_encode(s: &str) -> String {
     })
 }
 
-// 解析 PNG IHDR 头部获取原始尺寸
 fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     if data.len() < 24 {
         return None;
@@ -571,6 +734,94 @@ fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
         u32::from_be_bytes([data[16], data[17], data[18], data[19]]),
         u32::from_be_bytes([data[20], data[21], data[22], data[23]]),
     ))
+}
+
+fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return None;
+    }
+
+    let mut offset = 2usize;
+    while offset + 9 < data.len() {
+        if data[offset] != 0xFF {
+            offset += 1;
+            continue;
+        }
+        while offset < data.len() && data[offset] == 0xFF {
+            offset += 1;
+        }
+        if offset >= data.len() {
+            return None;
+        }
+        let marker = data[offset];
+        offset += 1;
+        if matches!(marker, 0xD8 | 0xD9) {
+            continue;
+        }
+        if offset + 2 > data.len() {
+            return None;
+        }
+        let segment_len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+        if segment_len < 2 || offset + segment_len > data.len() {
+            return None;
+        }
+        if matches!(marker, 0xC0 | 0xC1 | 0xC2 | 0xC3 | 0xC5 | 0xC6 | 0xC7 | 0xC9 | 0xCA | 0xCB | 0xCD | 0xCE | 0xCF) {
+            if offset + 7 > data.len() {
+                return None;
+            }
+            let height = u16::from_be_bytes([data[offset + 3], data[offset + 4]]) as u32;
+            let width = u16::from_be_bytes([data[offset + 5], data[offset + 6]]) as u32;
+            return Some((width, height));
+        }
+        offset += segment_len;
+    }
+    None
+}
+
+fn bmp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    if data.len() < 26 || data[0] != 0x42 || data[1] != 0x4D {
+        return None;
+    }
+    let width = i32::from_le_bytes([data[18], data[19], data[20], data[21]]).unsigned_abs();
+    let height = i32::from_le_bytes([data[22], data[23], data[24], data[25]]).unsigned_abs();
+    Some((width, height))
+}
+
+fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    png_dimensions(data)
+        .or_else(|| jpeg_dimensions(data))
+        .or_else(|| bmp_dimensions(data))
+}
+
+fn validate_aliyun_upscale_input(data: &[u8]) -> Result<(u32, u32), String> {
+    if data.len() > ALIYUN_UPSCALE_MAX_BYTES {
+        return Err("阿里云生成式超分输入图片不能超过 20 MB".into());
+    }
+
+    let (width, height) = image_dimensions(data)
+        .ok_or_else(|| "阿里云生成式超分仅支持 JPEG、JPG、PNG、BMP 图片".to_string())?;
+    let short_side = width.min(height);
+    let long_side = width.max(height);
+    if short_side < ALIYUN_UPSCALE_MIN_SIDE {
+        return Err(format!(
+            "阿里云生成式超分输入图片最小边不能低于 {}px",
+            ALIYUN_UPSCALE_MIN_SIDE
+        ));
+    }
+    if long_side > ALIYUN_UPSCALE_MAX_LONG_SIDE {
+        return Err(format!(
+            "阿里云生成式超分输入图片长边不能超过 {}px",
+            ALIYUN_UPSCALE_MAX_LONG_SIDE
+        ));
+    }
+    if long_side as f64 / short_side as f64 > ALIYUN_UPSCALE_MAX_ASPECT_RATIO {
+        return Err(format!(
+            "阿里云生成式超分输入图片长宽比不能超过 {}:1",
+            ALIYUN_UPSCALE_MAX_ASPECT_RATIO as u32
+        ));
+    }
+
+    Ok((width, height))
 }
 
 // HMAC-SHA1 + base64
@@ -986,14 +1237,10 @@ async fn aliyun_upscale(
     let image_bytes = STANDARD
         .decode(&image_base64)
         .map_err(|e| format!("base64 解码失败: {}", e))?;
+    let (orig_w, _) = validate_aliyun_upscale_input(&image_bytes)?;
 
-    // 从 PNG 头部推算放大倍数
-    let scale = if let Some((orig_w, _)) = png_dimensions(&image_bytes) {
-        let ratio = target_width as f64 / orig_w.max(1) as f64;
-        (ratio.round() as u32).min(4).max(2)
-    } else {
-        2
-    };
+    let ratio = target_width as f64 / orig_w.max(1) as f64;
+    let scale = (ratio.round() as u32).clamp(1, 4);
 
     let client = reqwest::Client::new();
 
@@ -1043,7 +1290,7 @@ async fn aliyun_upscale(
 
     // 6. 解析结果尺寸，保存到历史目录
     let (result_w, result_h) =
-        png_dimensions(&result_bytes).unwrap_or((target_width, target_height));
+        image_dimensions(&result_bytes).unwrap_or((target_width, target_height));
     let timestamp = now_millis() as i64;
     let image_dir = history_images_dir(&app, timestamp)?;
     let file_name = format!("{}_upscale_{}x.png", timestamp, scale);
@@ -1088,6 +1335,7 @@ pub fn run() {
             open_history_directory,
             get_history_root_dir,
             add_history_record,
+            save_history_upscale_variant,
             list_history_records,
             get_history_record,
             delete_history_record,

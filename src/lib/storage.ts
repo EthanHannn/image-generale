@@ -41,10 +41,12 @@ export type HistoryRecord = {
   duration: string
   requestJson: string
   totalSize: number
+  upscaledImages?: Record<number, Record<number, Blob>>
 }
 
 type DesktopHistoryRecord = Omit<HistoryRecord, 'images'> & {
   imagesBase64: string[]
+  upscaleImagesBase64?: Record<string, Record<string, string>>
 }
 
 type DbConfig = {
@@ -226,16 +228,32 @@ async function invokeDesktop<T>(command: string, args?: Record<string, unknown>)
 }
 
 async function serializeHistoryRecord(record: HistoryRecord): Promise<DesktopHistoryRecord> {
+  const upscaleImagesBase64: Record<string, Record<string, string>> = {}
+  for (const [imageIndex, variants] of Object.entries(record.upscaledImages || {})) {
+    upscaleImagesBase64[imageIndex] = {}
+    for (const [factor, blob] of Object.entries(variants))
+      upscaleImagesBase64[imageIndex][factor] = await blobToBase64(blob)
+  }
+
   return {
     ...record,
     imagesBase64: await Promise.all((record.images || []).map(blob => blobToBase64(blob))),
+    upscaleImagesBase64,
   }
 }
 
 function deserializeHistoryRecord(record: DesktopHistoryRecord): HistoryRecord {
+  const upscaledImages: Record<number, Record<number, Blob>> = {}
+  for (const [imageIndex, variants] of Object.entries(record.upscaleImagesBase64 || {})) {
+    upscaledImages[Number(imageIndex)] = {}
+    for (const [factor, base64] of Object.entries(variants))
+      upscaledImages[Number(imageIndex)][Number(factor)] = base64ToBlob(base64)
+  }
+
   return {
     ...record,
     images: (record.imagesBase64 || []).map(base64 => base64ToBlob(base64)),
+    upscaledImages,
   }
 }
 
@@ -431,6 +449,44 @@ export function addRecord(record: HistoryRecord) {
   return withStore<number>('readwrite', (store, resolve, reject) => {
     const request = store.add(record)
     request.onsuccess = () => resolve(Number(request.result))
+    request.onerror = () => reject(request.error)
+  })
+}
+
+export function saveHistoryUpscaleVariant(
+  recordId: number,
+  imageIndex: number,
+  factor: number,
+  imageBase64: string,
+  localPath?: string,
+) {
+  if (isDesktopApp()) {
+    return invokeDesktop<void>('save_history_upscale_variant', {
+      recordId,
+      imageIndex,
+      factor,
+      imageBase64,
+      localPath: localPath || null,
+    })
+  }
+
+  return withStore<void>('readwrite', (store, resolve, reject) => {
+    const request = store.get(recordId)
+    request.onsuccess = () => {
+      const record = request.result as HistoryRecord | undefined
+      if (!record) {
+        resolve()
+        return
+      }
+      const upscaledImages = record.upscaledImages || {}
+      upscaledImages[imageIndex] = {
+        ...(upscaledImages[imageIndex] || {}),
+        [factor]: base64ToBlob(imageBase64),
+      }
+      const updateRequest = store.put({ ...record, upscaledImages })
+      updateRequest.onsuccess = () => resolve()
+      updateRequest.onerror = () => reject(updateRequest.error)
+    }
     request.onerror = () => reject(request.error)
   })
 }

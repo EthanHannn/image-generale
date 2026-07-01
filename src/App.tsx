@@ -20,6 +20,7 @@ import {
   normalizeBaseUrl,
   openHistoryDirectory,
   saveAppConfig,
+  saveHistoryUpscaleVariant,
   selectHistoryDirectory,
   upscaleProviderToConfig,
   THEME_KEY,
@@ -41,6 +42,12 @@ type ResultImage = { b64_json?: string; url?: string }
 type ResultPayload = { data?: ResultImage[]; error?: { message?: string } | string }
 type ViewName = 'workspace' | 'history' | 'settings'
 type SizeFilter = 'all' | 'square' | 'landscape' | 'portrait' | 'ultrawide'
+type UpscaleFactor = 1 | 2 | 3 | 4
+
+const ALIYUN_UPSCALE_MAX_BYTES = 20 * 1024 * 1024
+const ALIYUN_UPSCALE_MIN_SIDE = 64
+const ALIYUN_UPSCALE_MAX_LONG_SIDE = 5000
+const ALIYUN_UPSCALE_MAX_ASPECT_RATIO = 2
 
 const emptyParams: RequestParams = {
   n: 1,
@@ -97,6 +104,7 @@ export default function App() {
   const [upscaleResponseJson, setUpscaleResponseJson] = useState('无')
   const [resultTimer, setResultTimer] = useState('')
   const [results, setResults] = useState<ResultImage[]>([])
+  const [activeHistoryRecordId, setActiveHistoryRecordId] = useState<number | null>(null)
   const [loadingCount, setLoadingCount] = useState(0)
   const [isGenerating, setIsGenerating] = useState(false)
   const [imageSizes, setImageSizes] = useState<Record<number, string>>({})
@@ -107,7 +115,8 @@ export default function App() {
   const [upscaleProviders, setUpscaleProviders] = useState<UpscaleProviderConfig[]>(initialUpscaleStore.providers)
   const [currentUpscaleProviderId, setCurrentUpscaleProviderId] = useState(initialUpscaleStore.currentProviderId)
   const [upscaleProviderDraft, setUpscaleProviderDraft] = useState<UpscaleProviderConfig>(() => makeEmptyUpscaleProvider())
-  const [upscaleFactor, setUpscaleFactor] = useState<2 | 4>(2)
+  const [selectedUpscaleFactors, setSelectedUpscaleFactors] = useState<Record<number, UpscaleFactor>>({})
+  const [resultUpscaleVariants, setResultUpscaleVariants] = useState<Record<number, Partial<Record<UpscaleFactor, string>>>>({})
   const [upscalingIndex, setUpscalingIndex] = useState<number | null>(null)
 
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([])
@@ -579,7 +588,10 @@ export default function App() {
     setIsGenerating(true)
     setLoadingCount(Math.max(params.n || 1, 1))
     setResults([])
+    setActiveHistoryRecordId(null)
     setImageSizes({})
+    setSelectedUpscaleFactors({})
+    setResultUpscaleVariants({})
     setUpscaleResponseJson('无')
     setCopiedIndex(null)
     setDownloadedIndex(null)
@@ -664,11 +676,16 @@ export default function App() {
         setGenStatus({ type: 'err', message: `失败 (${response.status}): ${message}` })
         showToast(`请求失败: ${message}`, 'error')
         setResults([])
+        setActiveHistoryRecordId(null)
+        setSelectedUpscaleFactors({})
+        setResultUpscaleVariants({})
         return
       }
 
       const nextResults = payload.data || []
       setResults(nextResults)
+      setSelectedUpscaleFactors({})
+      setResultUpscaleVariants({})
       setGenStatus({ type: 'ok', message: `成功生成 ${nextResults.length} 张，用时 ${duration}s` })
       showToast(`生成成功：${nextResults.length} 张图片`, 'success')
       await saveHistory(nextResults, duration, nextRequestJson)
@@ -680,6 +697,9 @@ export default function App() {
       }
       setLoadingCount(0)
       setResults([])
+      setActiveHistoryRecordId(null)
+      setSelectedUpscaleFactors({})
+      setResultUpscaleVariants({})
       if ((error as Error).name === 'AbortError') {
         setGenStatus({ type: 'warn', message: '已取消生成' })
       }
@@ -721,7 +741,7 @@ export default function App() {
       resolution: currentModel.hasResolution ? params.resolution : undefined,
     }
 
-    await addRecord({
+    const recordId = await addRecord({
       timestamp: Date.now(),
       providerId: currentProvider.id,
       providerName: currentProvider.name,
@@ -736,32 +756,43 @@ export default function App() {
       requestJson: nextRequestJson,
       totalSize: totalSize + JSON.stringify(nextParams).length + prompt.trim().length,
     })
+    setActiveHistoryRecordId(recordId || null)
 
     await enforceStorageLimit()
     await refreshHistory()
   }
 
+  function getCurrentImageBase64(index: number) {
+    const selectedFactor = selectedUpscaleFactors[index] || 1
+    if (selectedFactor > 1) {
+      const variant = resultUpscaleVariants[index]?.[selectedFactor]
+      if (variant)
+        return variant
+    }
+    return results[index]?.b64_json || ''
+  }
+
   async function handleDownload(index: number) {
-    const image = results[index]
-    if (!image?.b64_json) {
+    const imageBase64 = getCurrentImageBase64(index)
+    if (!imageBase64) {
       showToast('无图片数据可下载', 'error')
       return
     }
     const filename = `${currentModel?.id || 'image'}_${sanitizeFilename(prompt.trim())}_${index + 1}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`
-    downloadBlob(base64ToBlob(image.b64_json), filename)
+    downloadBlob(base64ToBlob(imageBase64), filename)
     setDownloadedIndex(index)
     window.setTimeout(() => setDownloadedIndex(current => current === index ? null : current), 2000)
     showToast(`图片已下载：${filename}`, 'success')
   }
 
   async function handleCopy(index: number) {
-    const image = results[index]
-    if (!image?.b64_json) {
+    const imageBase64 = getCurrentImageBase64(index)
+    if (!imageBase64) {
       showToast('无数据可复制', 'error')
       return
     }
     try {
-      await navigator.clipboard.writeText(`data:image/png;base64,${image.b64_json}`)
+      await navigator.clipboard.writeText(`data:image/png;base64,${imageBase64}`)
       setCopiedIndex(index)
       window.setTimeout(() => setCopiedIndex(current => current === index ? null : current), 2000)
       showToast('Base64 已复制到剪贴板', 'success')
@@ -781,26 +812,46 @@ export default function App() {
       showToast('请先配置放大服务', 'error')
       return
     }
+    const selectedFactor = selectedUpscaleFactors[index] || 1
+    const existingVariant = resultUpscaleVariants[index]?.[selectedFactor]
+    if (selectedFactor === 1) {
+      showToast('1X 为原图，不需要提升分辨率', 'error')
+      return
+    }
+    if (existingVariant) {
+      showToast(`当前图片已存在 ${selectedFactor}X 版本，不能重复提升`, 'error')
+      return
+    }
 
-    const dims = parseImageSize(imageSizes[index])
+    const dims = currentUpscaleConfig.provider === 'aliyun'
+      ? await validateAliyunUpscaleInput(image.b64_json)
+      : await readBase64ImageSize(image.b64_json).catch(() => parseImageSize(imageSizes[index]))
     if (!dims) {
       showToast('图片尺寸尚未就绪，请稍候再试', 'error')
       return
     }
 
-    const targetWidth = Math.round(dims.width * upscaleFactor)
-    const targetHeight = Math.round(dims.height * upscaleFactor)
+    const targetWidth = Math.round(dims.width * selectedFactor)
+    const targetHeight = Math.round(dims.height * selectedFactor)
 
     setUpscalingIndex(index)
     setUpscaleResponseJson('处理中...')
     try {
       const out = await upscaleImage(currentUpscaleConfig, image.b64_json, targetWidth, targetHeight)
-      setResults(current => current.map((item, currentIndex) => currentIndex === index ? { b64_json: out.imageBase64 } : item))
+      setResultUpscaleVariants(current => ({
+        ...current,
+        [index]: {
+          ...(current[index] || {}),
+          [selectedFactor]: out.imageBase64,
+        },
+      }))
       setImageSizes(current => ({ ...current, [index]: `${out.width} × ${out.height}px` }))
       setUpscaleResponseJson(JSON.stringify(out.responseJson || {
         width: out.width,
         height: out.height,
       }, null, 2))
+      if (activeHistoryRecordId !== null)
+        await saveHistoryUpscaleVariant(activeHistoryRecordId, index, selectedFactor, out.imageBase64, out.localPath)
       await enforceStorageLimit()
       await refreshHistory()
       showToast(`已放大至 ${out.width} × ${out.height}`, 'success')
@@ -843,7 +894,19 @@ export default function App() {
     const restored: ResultImage[] = []
     for (const blob of record.images || [])
       restored.push({ b64_json: await blobToBase64(blob) })
+    const restoredVariants: Record<number, Partial<Record<UpscaleFactor, string>>> = {}
+    for (const [imageIndex, variants] of Object.entries(record.upscaledImages || {})) {
+      restoredVariants[Number(imageIndex)] = {}
+      for (const [factor, blob] of Object.entries(variants)) {
+        const numericFactor = Number(factor) as UpscaleFactor
+        if ([2, 3, 4].includes(numericFactor))
+          restoredVariants[Number(imageIndex)][numericFactor] = await blobToBase64(blob)
+      }
+    }
     setImageSizes({})
+    setSelectedUpscaleFactors({})
+    setResultUpscaleVariants(restoredVariants)
+    setActiveHistoryRecordId(record.id || null)
     setCopiedIndex(null)
     setDownloadedIndex(null)
     setResults(restored)
@@ -1202,7 +1265,20 @@ export default function App() {
                       </div>
                     )
                   : results.map((image, index) => {
-                      const source = image.b64_json ? `data:image/png;base64,${image.b64_json}` : image.url || ''
+                      const selectedFactor = selectedUpscaleFactors[index] || 1
+                      const selectedVariant = resultUpscaleVariants[index]?.[selectedFactor]
+                      const selectedBase64 = selectedFactor === 1 ? image.b64_json : selectedVariant
+                      const source = selectedBase64 ? `data:image/png;base64,${selectedBase64}` : image.b64_json ? `data:image/png;base64,${image.b64_json}` : image.url || ''
+                      const isUpscaleConfigured = isUpscaleProviderConfigured(currentUpscaleProvider)
+                      const hasSelectedVariant = selectedFactor > 1 && !!selectedVariant
+                      const upscaleDisabled = !isUpscaleConfigured || upscalingIndex !== null || selectedFactor === 1 || hasSelectedVariant
+                      const upscaleTitle = !isUpscaleConfigured
+                        ? '请先在设置页配置放大服务'
+                        : selectedFactor === 1
+                          ? '1X 为原图，不需要提升分辨率'
+                          : hasSelectedVariant
+                            ? `当前图片已存在 ${selectedFactor}X 版本`
+                            : ''
                       return (
                         <div key={`${source}_${index}`} className="result-item">
                           <div className="info">
@@ -1247,14 +1323,22 @@ export default function App() {
                               ? (
                                   <div className="result-upscale-row">
                                     <div className="result-upscale-chips">
-                                      <button type="button" className={`chip ${upscaleFactor === 2 ? 'active' : ''}`} onClick={() => setUpscaleFactor(2)}>2x</button>
-                                      <button type="button" className={`chip ${upscaleFactor === 4 ? 'active' : ''}`} onClick={() => setUpscaleFactor(4)}>4x</button>
+                                      {([1, 2, 3, 4] as UpscaleFactor[]).map(factor => (
+                                        <button
+                                          key={factor}
+                                          type="button"
+                                          className={`chip ${selectedFactor === factor ? 'active' : ''}`}
+                                          onClick={() => setSelectedUpscaleFactors(current => ({ ...current, [index]: factor }))}
+                                        >
+                                          {factor}X
+                                        </button>
+                                      ))}
                                     </div>
                                     <button
                                       className="dl-btn result-upscale-btn"
                                       type="button"
-                                      disabled={!isUpscaleProviderConfigured(currentUpscaleProvider) || upscalingIndex !== null}
-                                      title={!isUpscaleProviderConfigured(currentUpscaleProvider) ? '请先在设置页配置放大服务' : ''}
+                                      disabled={upscaleDisabled}
+                                      title={upscaleTitle}
                                       onClick={() => void handleUpscale(index)}
                                     >
                                       {upscalingIndex === index ? '放大中…' : '提升分辨率'}
@@ -1786,6 +1870,55 @@ function parseImageSize(text: string | undefined) {
   if (!match)
     return null
   return { width: Number(match[1]), height: Number(match[2]) }
+}
+
+function readBase64ImageSize(imageBase64: string) {
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
+    image.onerror = () => reject(new Error('图片尺寸读取失败'))
+    image.src = `data:image/png;base64,${imageBase64}`
+  })
+}
+
+function getBase64ByteLength(imageBase64: string) {
+  const normalized = imageBase64.replace(/\s/g, '')
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0
+  return Math.floor((normalized.length * 3) / 4) - padding
+}
+
+function detectImageFormat(imageBase64: string) {
+  const header = atob(imageBase64.slice(0, 32))
+  const bytes = Array.from(header, char => char.charCodeAt(0))
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47)
+    return 'PNG'
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8)
+    return 'JPEG'
+  if (bytes[0] === 0x42 && bytes[1] === 0x4D)
+    return 'BMP'
+  return ''
+}
+
+async function validateAliyunUpscaleInput(imageBase64: string) {
+  const byteLength = getBase64ByteLength(imageBase64)
+  if (byteLength > ALIYUN_UPSCALE_MAX_BYTES)
+    throw new Error(`阿里云生成式超分输入图片不能超过 ${formatSize(ALIYUN_UPSCALE_MAX_BYTES)}`)
+
+  const format = detectImageFormat(imageBase64)
+  if (!format)
+    throw new Error('阿里云生成式超分仅支持 JPEG、JPG、PNG、BMP 图片')
+
+  const dims = await readBase64ImageSize(imageBase64)
+  const shortSide = Math.min(dims.width, dims.height)
+  const longSide = Math.max(dims.width, dims.height)
+  if (shortSide < ALIYUN_UPSCALE_MIN_SIDE)
+    throw new Error(`阿里云生成式超分输入图片最小边不能低于 ${ALIYUN_UPSCALE_MIN_SIDE}px`)
+  if (longSide > ALIYUN_UPSCALE_MAX_LONG_SIDE)
+    throw new Error(`阿里云生成式超分输入图片长边不能超过 ${ALIYUN_UPSCALE_MAX_LONG_SIDE}px`)
+  if (longSide / shortSide > ALIYUN_UPSCALE_MAX_ASPECT_RATIO)
+    throw new Error(`阿里云生成式超分输入图片长宽比不能超过 ${ALIYUN_UPSCALE_MAX_ASPECT_RATIO}:1`)
+
+  return dims
 }
 
 function makeEmptyUpscaleProvider(provider: UpscaleProvider = 'aliyun'): UpscaleProviderConfig {

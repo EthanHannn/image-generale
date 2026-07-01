@@ -5,6 +5,8 @@ export type UpscaleResult = {
   imageBase64: string
   width: number
   height: number
+  localPath?: string
+  scale?: number
   responseJson?: unknown
 }
 
@@ -53,7 +55,7 @@ async function invokeCustomUpscale(
 }
 
 // 阿里云路径：调 Tauri 后端命令（Step 3 实现）
-// targetWidth/targetHeight 透传给 Rust，由后端解码图片后推算 scale (2 or 4)
+// targetWidth/targetHeight 透传给 Rust，由后端解码图片后推算 scale (1-4)
 async function invokeAliyunUpscale(
   accessKeyId: string,
   accessKeySecret: string,
@@ -62,7 +64,14 @@ async function invokeAliyunUpscale(
   targetHeight: number,
 ): Promise<UpscaleResult> {
   const { invoke } = await import('@tauri-apps/api/core')
-  const result = await invoke<{ image_base64: string; width: number; height: number; response_json?: unknown }>('aliyun_upscale', {
+  const result = await invoke<{
+    image_base64: string
+    width: number
+    height: number
+    local_path?: string
+    scale?: number
+    response_json?: unknown
+  }>('aliyun_upscale', {
     accessKeyId,
     accessKeySecret,
     imageBase64,
@@ -71,5 +80,12 @@ async function invokeAliyunUpscale(
   }).catch((error: unknown) => {
     throw new Error(getErrorMessage(error))
   })
-  return { imageBase64: result.image_base64, width: result.width, height: result.height, responseJson: result.response_json }
+  return {
+    imageBase64: result.image_base64,
+    width: result.width,
+    height: result.height,
+    localPath: result.local_path,
+    scale: result.scale,
+    responseJson: result.response_json,
+  }
 }
