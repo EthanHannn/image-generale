@@ -109,17 +109,77 @@ button {
 .desktop-shell {
   display: grid;
   grid-template-columns: 284px minmax(0, 1fr);
-  min-height: 100vh;
+  grid-template-rows: 40px minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 标题栏跨两列 */
+.titlebar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  height: 40px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  /* 整体可拖动，按钮区域会阻断拖拽 */
+}
+
+.titlebar-mac-space,
+.titlebar-drag-left {
+  flex: 0 0 80px;
+  height: 100%;
+}
+
+.titlebar-center {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.titlebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 40px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  /* 标题栏按钮排除全局主题过渡中的 transform */
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.titlebar-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+  color: var(--text);
+  transform: none;
+  box-shadow: none;
+}
+
+.titlebar-btn.close:hover:not(:disabled) {
+  background: #ef4444;
+  color: #fff;
 }
 
 .shell-sidebar {
-  position: sticky;
-  top: 0;
   display: flex;
   flex-direction: column;
   gap: 22px;
-  height: 100vh;
+  height: 100%;
   padding: 26px 20px 20px;
+  overflow-y: auto;
   background: color-mix(in srgb, var(--panel) 95%, rgba(99, 102, 241, 0.08));
   border-right: 1px solid var(--border);
 }
@@ -266,6 +326,7 @@ button {
 .shell-main {
   min-width: 0;
   padding: 28px 28px 32px;
+  overflow-y: auto;
 }
 
 .view-header {

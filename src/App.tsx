@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -1290,9 +1291,40 @@ export default function App() {
     )
   }
 
+  const isTauri = typeof window !== 'undefined'
+    && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
+  const isMac = typeof navigator !== 'undefined'
+    && /mac/i.test(navigator.userAgent)
+    && !/iphone|ipad/i.test(navigator.userAgent)
+
+  async function handleMinimize() {
+    if (isTauri) await getCurrentWindow().minimize()
+  }
+  async function handleMaximize() {
+    if (isTauri) await getCurrentWindow().toggleMaximize()
+  }
+  async function handleClose() {
+    if (isTauri) await getCurrentWindow().close()
+  }
+
   return (
     <>
       <div className="desktop-shell">
+        <div className="titlebar">
+          {isMac
+            ? <div className="titlebar-mac-space" data-tauri-drag-region />
+            : <div className="titlebar-drag-left" data-tauri-drag-region />}
+          <div className="titlebar-center" data-tauri-drag-region>Image Generator</div>
+          {!isMac
+            ? (
+                <div className="titlebar-controls">
+                  <button className="titlebar-btn" type="button" onClick={() => void handleMinimize()}>&#x2014;</button>
+                  <button className="titlebar-btn" type="button" onClick={() => void handleMaximize()}>&#x25A1;</button>
+                  <button className="titlebar-btn close" type="button" onClick={() => void handleClose()}>&#x2715;</button>
+                </div>
+              )
+            : null}
+        </div>
         <aside className="shell-sidebar">
           <div className="brand-block">
             <div className="logo">◈</div>
