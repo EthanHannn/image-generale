@@ -1460,6 +1460,7 @@ button:disabled {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+  margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: 12px;
   font-size: 12px;
@@ -1518,12 +1519,33 @@ button:disabled {
   width: 100%;
   padding: 14px;
   border: 1px solid var(--border);
+  border-radius: 14px;
   text-align: left;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.2s ease,
+              box-shadow 0.2s ease,
+              background-color 0.2s ease;
+}
+
+.model-card:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  box-shadow: 0 4px 12px var(--shadow);
+  transform: none;
+  color: var(--text);
 }
 
 .model-card.active {
   border-color: var(--accent);
   background: linear-gradient(180deg, var(--accent-light), var(--panel-solid));
+}
+
+.model-card.active:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--accent-light), var(--panel-hover));
+  box-shadow: 0 4px 12px var(--shadow);
+  transform: none;
+  color: var(--text);
 }
 
 .name {
@@ -2381,6 +2403,95 @@ pre {
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar);
   border-radius: 999px;
+}
+
+/* API Key 可见性切换 */
+.key-input-wrap {
+  position: relative;
+}
+
+.key-input-wrap input {
+  padding-right: 38px;
+}
+
+.key-eye-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.key-eye-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+  color: var(--text);
+  transform: translateY(-50%);
+  box-shadow: none;
+}
+
+/* 测试连接 */
+input.input-error {
+  border-color: var(--err);
+}
+
+.test-conn-row {
+  display: flex;
+  margin-top: 4px;
+}
+
+.test-conn-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.test-conn-btn.test-conn-ok {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.test-conn-btn.test-conn-ok:hover:not(:disabled) {
+  background: var(--ok);
+  filter: brightness(0.9);
+  box-shadow: none;
+  transform: none;
+}
+
+.test-conn-spinner {
+  border-color: var(--border);
+  border-top-color: var(--accent);
+}
+
+.test-conn-error {
+  margin-top: 6px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--err);
+  line-height: 1.5;
+}
+
+/* 自动保存提示 */
+.autosave-hint {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--ok);
+  display: flex;
+  align-items: center;
 }
 
 @media (max-width: 980px) {

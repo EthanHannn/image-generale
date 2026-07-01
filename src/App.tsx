@@ -62,6 +62,7 @@ export default function App() {
   const toastTimerRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const modalDirtyRef = useRef(false)
 
   const [theme, setTheme] = useState<ThemeName>(getInitialTheme)
   const [providers, setProviders] = useState<ProviderConfig[]>(initialConfig.providers)
@@ -109,6 +110,10 @@ export default function App() {
 
   const [providerModalOpen, setProviderModalOpen] = useState(false)
   const [providerModalMode, setProviderModalMode] = useState<'create' | 'edit'>('create')
+  const [keyVisible, setKeyVisible] = useState(false)
+  const [testConnStatus, setTestConnStatus] = useState<'idle' | 'loading' | 'ok' | 'err'>('idle')
+  const [testConnMessage, setTestConnMessage] = useState('')
+  const [autoSaveHint, setAutoSaveHint] = useState(false)
 
   const currentProvider = providers.find(provider => provider.id === currentProviderId) || null
   const currentModel = models.find(model => model.id === currentModelId) || null
@@ -157,12 +162,40 @@ export default function App() {
   }, [configReady, providers, currentProviderId, upscaleConfig, theme, historyRootDir])
 
   useEffect(() => {
+    if (providerModalOpen)
+      return
     const provider = providers.find(item => item.id === currentProviderId)
     if (provider)
       setProviderDraft(provider)
     else
       setProviderDraft({ id: '', name: '', apiUrl: '', apiKey: '' })
-  }, [providers, currentProviderId])
+  }, [providers, currentProviderId, providerModalOpen])
+
+  useEffect(() => {
+    if (!providerModalOpen || providerModalMode !== 'edit' || !modalDirtyRef.current)
+      return
+    const name = providerDraft.name.trim()
+    const apiUrl = normalizeBaseUrl(providerDraft.apiUrl)
+    if (!name || !apiUrl)
+      return
+
+    const timer = window.setTimeout(() => {
+      const id = providerDraft.id
+      const nextProvider: ProviderConfig = { id, name, apiUrl, apiKey: providerDraft.apiKey.trim() }
+      setProviders((current) => {
+        const index = current.findIndex(item => item.id === id)
+        if (index < 0)
+          return current
+        const next = current.slice()
+        next[index] = nextProvider
+        return next
+      })
+      setAutoSaveHint(true)
+      window.setTimeout(() => setAutoSaveHint(false), 2000)
+    }, 500)
+
+    return () => window.clearTimeout(timer)
+  }, [providerDraft, providerModalOpen, providerModalMode])
 
   useEffect(() => {
     void refreshHistory()
@@ -213,6 +246,7 @@ export default function App() {
   }
 
   function updateProviderDraft<K extends keyof ProviderConfig>(key: K, value: ProviderConfig[K]) {
+    modalDirtyRef.current = true
     setProviderDraft(current => ({ ...current, [key]: value }))
   }
 
@@ -220,6 +254,11 @@ export default function App() {
     setProviderDraft({ id: '', name: '', apiUrl: '', apiKey: '' })
     setProviderModalMode('create')
     setConnStatus(null)
+    setKeyVisible(false)
+    setTestConnStatus('idle')
+    setTestConnMessage('')
+    setAutoSaveHint(false)
+    modalDirtyRef.current = false
     setProviderModalOpen(true)
   }
 
@@ -227,12 +266,21 @@ export default function App() {
     setProviderDraft(provider)
     setProviderModalMode('edit')
     setConnStatus(null)
+    setKeyVisible(false)
+    setTestConnStatus('idle')
+    setTestConnMessage('')
+    setAutoSaveHint(false)
+    modalDirtyRef.current = false
     setProviderModalOpen(true)
   }
 
   function closeProviderModal() {
     setProviderModalOpen(false)
     setConnStatus(null)
+    setKeyVisible(false)
+    setTestConnStatus('idle')
+    setTestConnMessage('')
+    setAutoSaveHint(false)
   }
 
   function saveProvider(): boolean {
@@ -260,13 +308,14 @@ export default function App() {
       return [...current, nextProvider]
     })
     setCurrentProviderId(id)
-    setConnStatus({ type: 'ok', message: '供应商配置已保存' })
     return true
   }
 
   function handleSaveProviderModal() {
-    if (saveProvider())
-      setProviderModalOpen(false)
+    if (saveProvider()) {
+      showToast('供应商配置已保存', 'success')
+      closeProviderModal()
+    }
   }
 
   function removeProvider(providerId: string) {
@@ -316,6 +365,30 @@ export default function App() {
     catch (error) {
       setConnStatus({ type: 'err', message: `拉取失败: ${(error as Error).message}` })
       showToast(`拉取模型失败: ${(error as Error).message}`, 'error')
+    }
+  }
+
+  async function testConnection() {
+    const apiUrl = normalizeBaseUrl(providerDraft.apiUrl)
+    if (!apiUrl) {
+      setTestConnStatus('err')
+      setTestConnMessage('请填写 API URL')
+      return
+    }
+    setTestConnStatus('loading')
+    setTestConnMessage('')
+    try {
+      const response = await fetch(`${apiUrl}/v1/models`, {
+        headers: providerDraft.apiKey ? { Authorization: `Bearer ${providerDraft.apiKey}` } : {},
+      })
+      if (!response.ok)
+        throw new Error(`HTTP ${response.status}`)
+      setTestConnStatus('ok')
+      window.setTimeout(() => setTestConnStatus('idle'), 2000)
+    }
+    catch (error) {
+      setTestConnStatus('err')
+      setTestConnMessage(`连接失败: ${(error as Error).message}`)
     }
   }
 
@@ -1367,6 +1440,7 @@ export default function App() {
                   <label htmlFor="modalApiUrl">API URL</label>
                   <input
                     id="modalApiUrl"
+                    className={testConnStatus === 'err' ? 'input-error' : ''}
                     value={providerDraft.apiUrl}
                     placeholder="https://your-api.com"
                     onChange={event => updateProviderDraft('apiUrl', event.target.value)}
@@ -1376,18 +1450,57 @@ export default function App() {
               <div className="row">
                 <div>
                   <label htmlFor="modalApiKey">API Key</label>
-                  <input
-                    id="modalApiKey"
-                    type="password"
-                    value={providerDraft.apiKey}
-                    placeholder="sk-xxxxx（可选）"
-                    onChange={event => updateProviderDraft('apiKey', event.target.value)}
-                  />
+                  <div className="key-input-wrap">
+                    <input
+                      id="modalApiKey"
+                      type={keyVisible ? 'text' : 'password'}
+                      value={providerDraft.apiKey}
+                      placeholder="sk-xxxxx（可选）"
+                      onChange={event => updateProviderDraft('apiKey', event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="key-eye-btn"
+                      tabIndex={-1}
+                      title={keyVisible ? '隐藏密钥' : '显示密钥'}
+                      onClick={() => setKeyVisible(v => !v)}
+                    >
+                      {keyVisible
+                        ? (
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                              <line x1="1" y1="1" x2="23" y2="23" />
+                            </svg>
+                          )
+                        : (
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                          )}
+                    </button>
+                  </div>
                 </div>
               </div>
+              <div className="test-conn-row">
+                <button
+                  type="button"
+                  className={`test-conn-btn secondary${testConnStatus === 'ok' ? ' test-conn-ok' : ''}`}
+                  disabled={testConnStatus === 'loading'}
+                  onClick={() => void testConnection()}
+                >
+                  {testConnStatus === 'loading' && <span className="btn-spinner test-conn-spinner" />}
+                  {testConnStatus === 'ok' ? '✓ 连接成功' : '测试连接'}
+                </button>
+              </div>
+              {testConnStatus === 'err' && testConnMessage
+                ? <div className="test-conn-error">{testConnMessage}</div>
+                : null}
               {renderStatus(connStatus)}
             </div>
             <div className="provider-modal-footer">
+              {autoSaveHint ? <span className="autosave-hint">✓ 已自动保存</span> : null}
               <button className="secondary" type="button" onClick={closeProviderModal}>取消</button>
               <button type="button" onClick={handleSaveProviderModal}>保存</button>
             </div>
