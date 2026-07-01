@@ -8,7 +8,7 @@ use sha1::Sha1;
 use std::{
     collections::BTreeMap,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -198,6 +198,27 @@ fn history_images_dir(app: &AppHandle, timestamp: i64) -> Result<PathBuf, String
     let dir = history_root_dir(app)?.join("images").join(month_key);
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
+}
+
+fn directory_size(path: &Path) -> Result<i64, String> {
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.is_file() {
+        return Ok(metadata.len() as i64);
+    }
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+
+    let mut total = 0i64;
+    for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        total += directory_size(&entry.path())?;
+    }
+    Ok(total)
 }
 
 fn open_history_db(app: &AppHandle) -> Result<Connection, String> {
@@ -473,15 +494,9 @@ fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
 #[tauri::command]
 fn clear_history_records(app: AppHandle) -> Result<(), String> {
     let connection = open_history_db(&app)?;
-    let mut statement = connection
-        .prepare("SELECT images_json FROM history_records")
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?;
-
-    for row in rows {
-        delete_history_images(&app, &row.map_err(|error| error.to_string())?)?;
+    let images_dir = history_root_dir(&app)?.join("images");
+    if images_dir.exists() {
+        fs::remove_dir_all(&images_dir).map_err(|error| error.to_string())?;
     }
 
     connection
@@ -493,15 +508,7 @@ fn clear_history_records(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_history_storage_usage(app: AppHandle) -> Result<i64, String> {
-    let connection = open_history_db(&app)?;
-    let total = connection
-        .query_row(
-            "SELECT COALESCE(SUM(total_size), 0) FROM history_records",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(total)
+    directory_size(&history_root_dir(&app)?)
 }
 
 #[tauri::command]
@@ -520,12 +527,12 @@ fn enforce_history_storage_limit(app: AppHandle, max_storage: i64) -> Result<(),
         .map_err(|error| error.to_string())?;
 
     for row in rows {
-        let (id, size) = row.map_err(|error| error.to_string())?;
+        let (id, _) = row.map_err(|error| error.to_string())?;
         if total <= max_storage {
             break;
         }
         delete_history_record(app.clone(), id)?;
-        total -= size;
+        total = get_history_storage_usage(app.clone())?;
     }
 
     Ok(())

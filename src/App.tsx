@@ -801,6 +801,8 @@ export default function App() {
         width: out.width,
         height: out.height,
       }, null, 2))
+      await enforceStorageLimit()
+      await refreshHistory()
       showToast(`已放大至 ${out.width} × ${out.height}`, 'success')
     }
     catch (error) {
