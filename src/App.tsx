@@ -61,6 +61,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const toastTimerRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   const [theme, setTheme] = useState<ThemeName>(getInitialTheme)
   const [providers, setProviders] = useState<ProviderConfig[]>(initialConfig.providers)
@@ -205,6 +206,10 @@ export default function App() {
     if (toastTimerRef.current)
       window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2500)
+  }
+
+  function cancelGeneration() {
+    abortControllerRef.current?.abort()
   }
 
   function updateProviderDraft<K extends keyof ProviderConfig>(key: K, value: ProviderConfig[K]) {
@@ -381,6 +386,9 @@ export default function App() {
       }
     }
 
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     setIsGenerating(true)
     setLoadingCount(Math.max(params.n || 1, 1))
     setResults([])
@@ -419,6 +427,7 @@ export default function App() {
             ...(currentProvider.apiKey ? { Authorization: `Bearer ${currentProvider.apiKey}` } : {}),
           },
           body: JSON.stringify(body),
+          signal: controller.signal,
         })
       }
       else {
@@ -442,6 +451,7 @@ export default function App() {
           method: 'POST',
           headers: currentProvider.apiKey ? { Authorization: `Bearer ${currentProvider.apiKey}` } : {},
           body: formData,
+          signal: controller.signal,
         })
       }
 
@@ -453,6 +463,11 @@ export default function App() {
       }
       setResultTimer(`⏱ ${duration}s`)
       setLoadingCount(0)
+
+      if (controller.signal.aborted) {
+        setGenStatus({ type: 'warn', message: '已取消生成' })
+        return
+      }
 
       if (!response.ok) {
         const message = typeof payload.error === 'string'
@@ -477,11 +492,17 @@ export default function App() {
       }
       setLoadingCount(0)
       setResults([])
-      setGenStatus({ type: 'err', message: `请求失败: ${(error as Error).message}` })
-      showToast(`请求失败: ${(error as Error).message}`, 'error')
+      if ((error as Error).name === 'AbortError') {
+        setGenStatus({ type: 'warn', message: '已取消生成' })
+      }
+      else {
+        setGenStatus({ type: 'err', message: `请求失败: ${(error as Error).message}` })
+        showToast(`请求失败: ${(error as Error).message}`, 'error')
+      }
     }
     finally {
       setIsGenerating(false)
+      abortControllerRef.current = null
     }
   }
 
@@ -919,9 +940,33 @@ export default function App() {
                 <strong>{currentModel?.displayName || '尚未选择模型'}</strong>
                 <span>{prompt.trim() ? `Prompt 已填写 ${prompt.trim().length} 字` : '填写 Prompt 后即可开始生成'}</span>
               </div>
-              <button className="generate-btn" type="button" disabled={!currentModel || isGenerating} onClick={() => void generate()}>
-                {mode === 'edit' ? '生成图片（图生图）' : '生成图片'}
-              </button>
+              <div className="gen-btn-group">
+                <button
+                  className={`generate-btn${isGenerating ? ' is-generating' : ''}`}
+                  type="button"
+                  disabled={!currentModel || isGenerating}
+                  onClick={() => void generate()}
+                >
+                  {isGenerating
+                    ? (
+                        <>
+                          <span className="btn-spinner" />
+                          <span>
+                            生成中
+                            {resultTimer ? ` ${resultTimer.replace('⏱ ', '')}` : ''}
+                          </span>
+                        </>
+                      )
+                    : (mode === 'edit' ? '生成图片（图生图）' : '生成图片')}
+                </button>
+                {isGenerating
+                  ? (
+                      <button className="cancel-btn" type="button" onClick={cancelGeneration}>
+                        取消
+                      </button>
+                    )
+                  : null}
+              </div>
             </div>
             {renderStatus(genStatus)}
           </section>

@@ -63,7 +63,7 @@ export function HistoryView(props: HistoryViewProps) {
           </div>
         </div>
         <div className="history-overview-grid">
-          <div className="history-overview-card accent">
+          <div className="history-overview-card">
             <span className="history-overview-label">历史资产</span>
             <strong>{historyRecords.length}</strong>
             <span className="history-overview-copy">当前已归档 {totalImages} 张图片，支持回显与二次筛选。</span>
@@ -71,7 +71,7 @@ export function HistoryView(props: HistoryViewProps) {
           <div className="history-overview-card">
             <span className="history-overview-label">最新记录</span>
             <strong>{latestRecord?.modelId || '暂无记录'}</strong>
-            <span className="history-overview-copy">{latestRecord?.prompt || '生成图片后会在这里形成可回溯资产。'}</span>
+            <span className="history-overview-copy history-overview-copy--clamp">{latestRecord?.prompt || '生成图片后会在这里形成可回溯资产。'}</span>
           </div>
           <div className="history-overview-card">
             <span className="history-overview-label">存储占用</span>

@@ -15,8 +15,21 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
   const promptSummary = record.prompt || '(无 Prompt)'
   const sizeLabel = record.params.resolution || record.params.size || '未记录尺寸'
 
+  function handleCardKey(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      record.id && void onRecallHistory(record.id)
+    }
+  }
+
   return (
-    <button className="history-card" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>
+    <div
+      className="history-card"
+      role="button"
+      tabIndex={0}
+      onClick={() => record.id && void onRecallHistory(record.id)}
+      onKeyDown={handleCardKey}
+    >
       <div className="history-thumb-rail">
         {thumbUrl
           ? <img className="thumb history-thumb" src={thumbUrl} alt={record.prompt || 'history'} />
@@ -30,7 +43,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
           <span className="model-tag">{record.modelId}</span>
           <span className="history-card-timestamp">{formatTime(record.timestamp)}</span>
         </div>
-        <div className="card-prompt history-card-prompt" title={promptSummary}>{promptSummary}</div>
+        <div className="history-card-prompt" title={promptSummary}>{promptSummary}</div>
         <div className="history-card-summary">
           <span>{record.imageCount} 张图片</span>
           <span>{sizeLabel}</span>
@@ -43,10 +56,10 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
         </div>
       </div>
       <div className="card-actions history-card-actions" onClick={event => event.stopPropagation()}>
-        <button className="dl-btn history-action-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>回显到工作台</button>
-        <button className="dl-btn delete-btn history-action-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id)}>删除记录</button>
+        <button className="history-action-btn primary-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>回显到工作台</button>
+        <button className="history-action-btn delete-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id)}>删除记录</button>
       </div>
-    </button>
+    </div>
   )
 }
 
