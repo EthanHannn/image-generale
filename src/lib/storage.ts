@@ -52,23 +52,168 @@ type DbConfig = {
   currentProviderId: string
 }
 
-export type UpscaleConfig = {
+export type UpscaleProvider = 'aliyun' | 'custom'
+
+export type UpscaleProviderConfig = {
+  id: string
+  name: string
+  provider: UpscaleProvider
+  accessKeyId: string
+  accessKeySecret: string
   apiUrl: string
   apiKey: string
 }
 
+export type AliyunUpscaleConfig = {
+  provider: 'aliyun'
+  accessKeyId: string
+  accessKeySecret: string
+}
+
+export type CustomUpscaleConfig = {
+  provider: 'custom'
+  apiUrl: string
+  apiKey: string
+}
+
+export type UpscaleConfig = AliyunUpscaleConfig | CustomUpscaleConfig
+
+export function isUpscaleConfigured(config: UpscaleConfig): boolean {
+  if (config.provider === 'aliyun')
+    return !!(config.accessKeyId && config.accessKeySecret)
+  return !!normalizeBaseUrl(config.apiUrl)
+}
+
 export type AppConfigSnapshot = DbConfig & {
   upscaleConfig: UpscaleConfig
+  upscaleProviders: UpscaleProviderConfig[]
+  currentUpscaleProviderId: string
   theme: ThemeName
   historyRootDir: string
 }
 
+// UI 层使用的平铺表单状态，两套供应商字段同时保留，切换不清空
+export type UpscaleFormState = {
+  provider: UpscaleProvider
+  accessKeyId: string
+  accessKeySecret: string
+  apiUrl: string
+  apiKey: string
+}
+
+export function toUpscaleConfig(form: UpscaleFormState): UpscaleConfig {
+  if (form.provider === 'aliyun')
+    return { provider: 'aliyun', accessKeyId: form.accessKeyId, accessKeySecret: form.accessKeySecret }
+  return { provider: 'custom', apiUrl: form.apiUrl, apiKey: form.apiKey }
+}
+
+export function fromUpscaleConfig(config: UpscaleConfig): UpscaleFormState {
+  if (config.provider === 'aliyun')
+    return { provider: 'aliyun', accessKeyId: config.accessKeyId, accessKeySecret: config.accessKeySecret, apiUrl: '', apiKey: '' }
+  return { provider: 'custom', apiUrl: config.apiUrl, apiKey: config.apiKey, accessKeyId: '', accessKeySecret: '' }
+}
+
+export function upscaleProviderToConfig(provider: UpscaleProviderConfig | null | undefined): UpscaleConfig {
+  if (!provider)
+    return DEFAULT_UPSCALE_CONFIG
+  if (provider.provider === 'aliyun')
+    return { provider: 'aliyun', accessKeyId: provider.accessKeyId, accessKeySecret: provider.accessKeySecret }
+  return { provider: 'custom', apiUrl: provider.apiUrl, apiKey: provider.apiKey }
+}
+
+export function isUpscaleProviderConfigured(provider: UpscaleProviderConfig | null | undefined): boolean {
+  return !!provider && isUpscaleConfigured(upscaleProviderToConfig(provider))
+}
+
 const DEFAULT_UPSCALE_CONFIG: UpscaleConfig = {
+  provider: 'custom',
   apiUrl: '',
   apiKey: '',
 }
 
-function isDesktopApp() {
+const DEFAULT_UPSCALE_STORE = {
+  providers: [] as UpscaleProviderConfig[],
+  currentProviderId: '',
+}
+
+function normalizeUpscaleConfig(raw: unknown): UpscaleConfig {
+  if (typeof raw !== 'object' || raw === null)
+    return DEFAULT_UPSCALE_CONFIG
+  const obj = raw as Record<string, unknown>
+  if (obj.provider === 'aliyun') {
+    return {
+      provider: 'aliyun',
+      accessKeyId: typeof obj.accessKeyId === 'string' ? obj.accessKeyId : '',
+      accessKeySecret: typeof obj.accessKeySecret === 'string' ? obj.accessKeySecret : '',
+    }
+  }
+  // 兼容无 provider 字段的旧格式
+  return {
+    provider: 'custom',
+    apiUrl: typeof obj.apiUrl === 'string' ? obj.apiUrl : '',
+    apiKey: typeof obj.apiKey === 'string' ? obj.apiKey : '',
+  }
+}
+
+function normalizeUpscaleProviderConfig(raw: unknown): UpscaleProviderConfig | null {
+  if (typeof raw !== 'object' || raw === null)
+    return null
+
+  const obj = raw as Record<string, unknown>
+  const provider: UpscaleProvider = obj.provider === 'aliyun' ? 'aliyun' : 'custom'
+  return {
+    id: typeof obj.id === 'string' && obj.id ? obj.id : makeProviderId(),
+    name: typeof obj.name === 'string' && obj.name.trim() ? obj.name.trim() : '未命名超分服务',
+    provider,
+    accessKeyId: typeof obj.accessKeyId === 'string' ? obj.accessKeyId : '',
+    accessKeySecret: typeof obj.accessKeySecret === 'string' ? obj.accessKeySecret : '',
+    apiUrl: typeof obj.apiUrl === 'string' ? obj.apiUrl : '',
+    apiKey: typeof obj.apiKey === 'string' ? obj.apiKey : '',
+  }
+}
+
+function upscaleConfigToProvider(config: UpscaleConfig, name = '默认超分服务'): UpscaleProviderConfig {
+  const form = fromUpscaleConfig(config)
+  return {
+    id: makeProviderId(),
+    name,
+    provider: form.provider,
+    accessKeyId: form.accessKeyId,
+    accessKeySecret: form.accessKeySecret,
+    apiUrl: form.apiUrl,
+    apiKey: form.apiKey,
+  }
+}
+
+function normalizeUpscaleStore(raw: unknown, fallbackConfig?: UpscaleConfig) {
+  if (typeof raw === 'object' && raw !== null) {
+    const obj = raw as Record<string, unknown>
+    if (Array.isArray(obj.providers)) {
+      const providers = obj.providers
+        .map(normalizeUpscaleProviderConfig)
+        .filter((provider): provider is UpscaleProviderConfig => !!provider)
+      const currentProviderId = typeof obj.currentProviderId === 'string'
+        ? obj.currentProviderId
+        : ''
+      return {
+        providers,
+        currentProviderId: providers.some(provider => provider.id === currentProviderId)
+          ? currentProviderId
+          : providers[0]?.id || '',
+      }
+    }
+  }
+
+  const config = fallbackConfig || normalizeUpscaleConfig(raw)
+  if (isUpscaleConfigured(config)) {
+    const provider = upscaleConfigToProvider(config)
+    return { providers: [provider], currentProviderId: provider.id }
+  }
+
+  return DEFAULT_UPSCALE_STORE
+}
+
+export function isDesktopApp() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
@@ -196,12 +341,18 @@ function normalizeSnapshot(raw: Partial<AppConfigSnapshot> & { apiUrl?: string; 
   if (!config.currentProviderId && config.providers.length)
     config.currentProviderId = config.providers[0].id
 
+  const fallbackUpscaleConfig = normalizeUpscaleConfig(raw.upscaleConfig)
+  const upscaleStore = normalizeUpscaleStore({
+    providers: raw.upscaleProviders,
+    currentProviderId: raw.currentUpscaleProviderId,
+  }, fallbackUpscaleConfig)
+  const currentUpscaleProvider = upscaleStore.providers.find(provider => provider.id === upscaleStore.currentProviderId) || null
+
   return {
     ...config,
-    upscaleConfig: {
-      apiUrl: raw.upscaleConfig?.apiUrl || '',
-      apiKey: raw.upscaleConfig?.apiKey || '',
-    },
+    upscaleConfig: currentUpscaleProvider ? upscaleProviderToConfig(currentUpscaleProvider) : fallbackUpscaleConfig,
+    upscaleProviders: upscaleStore.providers,
+    currentUpscaleProviderId: upscaleStore.currentProviderId,
     historyRootDir: raw.historyRootDir || '',
     theme: raw.theme === 'light' || raw.theme === 'dark'
       ? raw.theme
@@ -210,9 +361,12 @@ function normalizeSnapshot(raw: Partial<AppConfigSnapshot> & { apiUrl?: string; 
 }
 
 export async function loadAppConfig(): Promise<AppConfigSnapshot> {
+  const upscaleStore = loadUpscaleProviders()
   const localSnapshot = normalizeSnapshot({
     ...loadConfig(),
     upscaleConfig: loadUpscaleConfig(),
+    upscaleProviders: upscaleStore.providers,
+    currentUpscaleProviderId: upscaleStore.currentProviderId,
     theme: loadThemeFromLocalStorage() || undefined,
   })
 
@@ -245,7 +399,10 @@ export async function saveAppConfig(snapshot: AppConfigSnapshot) {
     providers: nextSnapshot.providers,
     currentProviderId: nextSnapshot.currentProviderId,
   })
-  saveUpscaleConfig(nextSnapshot.upscaleConfig)
+  saveUpscaleStore({
+    providers: nextSnapshot.upscaleProviders,
+    currentProviderId: nextSnapshot.currentUpscaleProviderId,
+  })
   localStorage.setItem(THEME_KEY, nextSnapshot.theme)
 
   if (!isDesktopApp())
@@ -371,8 +528,12 @@ export async function enforceStorageLimit() {
 
 export function loadUpscaleConfig(): UpscaleConfig {
   try {
-    const raw = JSON.parse(localStorage.getItem(UPSCALE_KEY) || '{}') as Partial<UpscaleConfig>
-    return { apiUrl: raw.apiUrl || '', apiKey: raw.apiKey || '' }
+    const raw = JSON.parse(localStorage.getItem(UPSCALE_KEY) || '{}')
+    if (typeof raw === 'object' && raw !== null && Array.isArray((raw as { providers?: unknown }).providers)) {
+      const store = normalizeUpscaleStore(raw)
+      return upscaleProviderToConfig(store.providers.find(provider => provider.id === store.currentProviderId))
+    }
+    return normalizeUpscaleConfig(raw)
   }
   catch {
     return DEFAULT_UPSCALE_CONFIG
@@ -381,4 +542,18 @@ export function loadUpscaleConfig(): UpscaleConfig {
 
 export function saveUpscaleConfig(config: UpscaleConfig) {
   localStorage.setItem(UPSCALE_KEY, JSON.stringify(config))
+}
+
+export function loadUpscaleProviders() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(UPSCALE_KEY) || '{}')
+    return normalizeUpscaleStore(raw)
+  }
+  catch {
+    return DEFAULT_UPSCALE_STORE
+  }
+}
+
+export function saveUpscaleStore(store: { providers: UpscaleProviderConfig[]; currentProviderId: string }) {
+  localStorage.setItem(UPSCALE_KEY, JSON.stringify(normalizeUpscaleStore(store)))
 }

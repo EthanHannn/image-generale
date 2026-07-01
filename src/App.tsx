@@ -13,20 +13,25 @@ import {
   getTotalSize,
   loadAppConfig,
   loadConfig,
-  loadUpscaleConfig,
+  isDesktopApp,
+  isUpscaleProviderConfigured,
+  loadUpscaleProviders,
   makeProviderId,
   normalizeBaseUrl,
   openHistoryDirectory,
   saveAppConfig,
   selectHistoryDirectory,
+  upscaleProviderToConfig,
   THEME_KEY,
   type HistoryRecord,
   type ProviderConfig,
   type RequestParams,
   type ThemeName,
-  type UpscaleConfig,
+  type UpscaleProvider,
+  type UpscaleProviderConfig,
 } from './lib/storage'
 import { upscaleImage } from './lib/upscale'
+import { getErrorMessage } from './lib/errors'
 import { base64ToBlob, blobToBase64, downloadBlob, formatSize, sanitizeFilename } from './lib/utils'
 
 type StatusType = 'ok' | 'err' | 'loading' | 'warn'
@@ -58,6 +63,7 @@ function getInitialTheme(): ThemeName {
 
 export default function App() {
   const initialConfig = loadConfig()
+  const initialUpscaleStore = loadUpscaleProviders()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const toastTimerRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
@@ -88,6 +94,7 @@ export default function App() {
   const [sizeFilter, setSizeFilter] = useState<SizeFilter>('all')
   const [refFiles, setRefFiles] = useState<File[]>([])
   const [requestJson, setRequestJson] = useState('无')
+  const [upscaleResponseJson, setUpscaleResponseJson] = useState('无')
   const [resultTimer, setResultTimer] = useState('')
   const [results, setResults] = useState<ResultImage[]>([])
   const [loadingCount, setLoadingCount] = useState(0)
@@ -97,7 +104,9 @@ export default function App() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [previewImage, setPreviewImage] = useState('')
 
-  const [upscaleConfig, setUpscaleConfig] = useState<UpscaleConfig>(loadUpscaleConfig)
+  const [upscaleProviders, setUpscaleProviders] = useState<UpscaleProviderConfig[]>(initialUpscaleStore.providers)
+  const [currentUpscaleProviderId, setCurrentUpscaleProviderId] = useState(initialUpscaleStore.currentProviderId)
+  const [upscaleProviderDraft, setUpscaleProviderDraft] = useState<UpscaleProviderConfig>(() => makeEmptyUpscaleProvider())
   const [upscaleFactor, setUpscaleFactor] = useState<2 | 4>(2)
   const [upscalingIndex, setUpscalingIndex] = useState<number | null>(null)
 
@@ -110,12 +119,17 @@ export default function App() {
 
   const [providerModalOpen, setProviderModalOpen] = useState(false)
   const [providerModalMode, setProviderModalMode] = useState<'create' | 'edit'>('create')
+  const [upscaleModalOpen, setUpscaleModalOpen] = useState(false)
+  const [upscaleModalMode, setUpscaleModalMode] = useState<'create' | 'edit'>('create')
   const [keyVisible, setKeyVisible] = useState(false)
+  const [upscaleKeyVisible, setUpscaleKeyVisible] = useState(false)
   const [testConnStatus, setTestConnStatus] = useState<'idle' | 'loading' | 'ok' | 'err'>('idle')
   const [testConnMessage, setTestConnMessage] = useState('')
   const [autoSaveHint, setAutoSaveHint] = useState(false)
 
   const currentProvider = providers.find(provider => provider.id === currentProviderId) || null
+  const currentUpscaleProvider = upscaleProviders.find(provider => provider.id === currentUpscaleProviderId) || null
+  const currentUpscaleConfig = upscaleProviderToConfig(currentUpscaleProvider)
   const currentModel = models.find(model => model.id === currentModelId) || null
   const sizeOptions = getSortedSizes(currentModel?.supportedSizes || [])
   const resolutionOptions = currentModel?.supportedResolutions || []
@@ -134,7 +148,8 @@ export default function App() {
 
       setProviders(snapshot.providers)
       setCurrentProviderId(snapshot.currentProviderId)
-      setUpscaleConfig(snapshot.upscaleConfig)
+      setUpscaleProviders(snapshot.upscaleProviders)
+      setCurrentUpscaleProviderId(snapshot.currentUpscaleProviderId)
       setTheme(snapshot.theme)
       setHistoryRootDir(snapshot.historyRootDir)
       setConfigReady(true)
@@ -155,11 +170,19 @@ export default function App() {
     void saveAppConfig({
       providers,
       currentProviderId,
-      upscaleConfig,
+      upscaleConfig: upscaleProviderToConfig(upscaleProviders.find(provider => provider.id === currentUpscaleProviderId)),
+      upscaleProviders,
+      currentUpscaleProviderId,
       theme,
       historyRootDir,
     })
-  }, [configReady, providers, currentProviderId, upscaleConfig, theme, historyRootDir])
+  }, [configReady, providers, currentProviderId, upscaleProviders, currentUpscaleProviderId, theme, historyRootDir])
+
+  useEffect(() => {
+    if (currentUpscaleProviderId && upscaleProviders.some(provider => provider.id === currentUpscaleProviderId))
+      return
+    setCurrentUpscaleProviderId(upscaleProviders[0]?.id || '')
+  }, [upscaleProviders, currentUpscaleProviderId])
 
   useEffect(() => {
     if (providerModalOpen)
@@ -332,6 +355,95 @@ export default function App() {
     resetModelState()
   }
 
+  function updateUpscaleProviderDraft<K extends keyof UpscaleProviderConfig>(key: K, value: UpscaleProviderConfig[K]) {
+    setUpscaleProviderDraft(current => ({ ...current, [key]: value }))
+  }
+
+  function openCreateUpscaleModal() {
+    setUpscaleProviderDraft(makeEmptyUpscaleProvider(isDesktopApp() ? 'aliyun' : 'custom'))
+    setUpscaleModalMode('create')
+    setConnStatus(null)
+    setUpscaleKeyVisible(false)
+    setUpscaleModalOpen(true)
+  }
+
+  function openEditUpscaleModal(provider: UpscaleProviderConfig) {
+    setUpscaleProviderDraft(provider)
+    setUpscaleModalMode('edit')
+    setConnStatus(null)
+    setUpscaleKeyVisible(false)
+    setUpscaleModalOpen(true)
+  }
+
+  function closeUpscaleModal() {
+    setUpscaleModalOpen(false)
+    setConnStatus(null)
+    setUpscaleKeyVisible(false)
+  }
+
+  function saveUpscaleProvider(): boolean {
+    const name = upscaleProviderDraft.name.trim()
+    if (!name) {
+      setConnStatus({ type: 'err', message: '请填写超分服务名称' })
+      return false
+    }
+    if (upscaleProviderDraft.provider === 'aliyun') {
+      if (!isDesktopApp()) {
+        setConnStatus({ type: 'err', message: '阿里云超分仅桌面端可用' })
+        return false
+      }
+      if (!upscaleProviderDraft.accessKeyId.trim() || !upscaleProviderDraft.accessKeySecret.trim()) {
+        setConnStatus({ type: 'err', message: '请填写 AccessKey ID 和 AccessKey Secret' })
+        return false
+      }
+    }
+    else if (!normalizeBaseUrl(upscaleProviderDraft.apiUrl)) {
+      setConnStatus({ type: 'err', message: '请填写自定义超分服务地址' })
+      return false
+    }
+
+    const id = upscaleModalMode === 'edit' ? upscaleProviderDraft.id : makeProviderId()
+    const nextProvider: UpscaleProviderConfig = {
+      id,
+      name,
+      provider: upscaleProviderDraft.provider,
+      accessKeyId: upscaleProviderDraft.accessKeyId.trim(),
+      accessKeySecret: upscaleProviderDraft.accessKeySecret.trim(),
+      apiUrl: normalizeBaseUrl(upscaleProviderDraft.apiUrl),
+      apiKey: upscaleProviderDraft.apiKey.trim(),
+    }
+    setUpscaleProviders((current) => {
+      const index = current.findIndex(item => item.id === id)
+      if (index >= 0) {
+        const next = current.slice()
+        next[index] = nextProvider
+        return next
+      }
+      return [...current, nextProvider]
+    })
+    setCurrentUpscaleProviderId(id)
+    return true
+  }
+
+  function handleSaveUpscaleProviderModal() {
+    if (saveUpscaleProvider()) {
+      showToast('超分服务配置已保存', 'success')
+      closeUpscaleModal()
+    }
+  }
+
+  function removeUpscaleProvider(providerId: string) {
+    setUpscaleProviders(current => current.filter(item => item.id !== providerId))
+    if (currentUpscaleProviderId === providerId)
+      setCurrentUpscaleProviderId('')
+    showToast('超分服务已删除', 'success')
+  }
+
+  function onUpscaleProviderChange(providerId: string) {
+    setCurrentUpscaleProviderId(providerId)
+    setUpscaleResponseJson('无')
+  }
+
   async function loadModels() {
     if (!currentProvider) {
       setConnStatus({ type: 'err', message: '请先选择供应商' })
@@ -363,8 +475,9 @@ export default function App() {
       })
     }
     catch (error) {
-      setConnStatus({ type: 'err', message: `拉取失败: ${(error as Error).message}` })
-      showToast(`拉取模型失败: ${(error as Error).message}`, 'error')
+      const message = getErrorMessage(error)
+      setConnStatus({ type: 'err', message: `拉取失败: ${message}` })
+      showToast(`拉取模型失败: ${message}`, 'error')
     }
   }
 
@@ -387,8 +500,9 @@ export default function App() {
       window.setTimeout(() => setTestConnStatus('idle'), 2000)
     }
     catch (error) {
+      const message = getErrorMessage(error)
       setTestConnStatus('err')
-      setTestConnMessage(`连接失败: ${(error as Error).message}`)
+      setTestConnMessage(`连接失败: ${message}`)
     }
   }
 
@@ -466,6 +580,7 @@ export default function App() {
     setLoadingCount(Math.max(params.n || 1, 1))
     setResults([])
     setImageSizes({})
+    setUpscaleResponseJson('无')
     setCopiedIndex(null)
     setDownloadedIndex(null)
     setResultTimer('')
@@ -569,8 +684,9 @@ export default function App() {
         setGenStatus({ type: 'warn', message: '已取消生成' })
       }
       else {
-        setGenStatus({ type: 'err', message: `请求失败: ${(error as Error).message}` })
-        showToast(`请求失败: ${(error as Error).message}`, 'error')
+        const message = getErrorMessage(error)
+        setGenStatus({ type: 'err', message: `请求失败: ${message}` })
+        showToast(`请求失败: ${message}`, 'error')
       }
     }
     finally {
@@ -651,7 +767,7 @@ export default function App() {
       showToast('Base64 已复制到剪贴板', 'success')
     }
     catch (error) {
-      showToast(`复制失败: ${(error as Error).message}`, 'error')
+      showToast(`复制失败: ${getErrorMessage(error)}`, 'error')
     }
   }
 
@@ -661,7 +777,7 @@ export default function App() {
       showToast('该图片无 base64 数据，无法放大', 'error')
       return
     }
-    if (!normalizeBaseUrl(upscaleConfig.apiUrl)) {
+    if (!isUpscaleProviderConfigured(currentUpscaleProvider)) {
       showToast('请先配置放大服务', 'error')
       return
     }
@@ -676,14 +792,21 @@ export default function App() {
     const targetHeight = Math.round(dims.height * upscaleFactor)
 
     setUpscalingIndex(index)
+    setUpscaleResponseJson('处理中...')
     try {
-      const out = await upscaleImage(upscaleConfig, image.b64_json, targetWidth, targetHeight)
+      const out = await upscaleImage(currentUpscaleConfig, image.b64_json, targetWidth, targetHeight)
       setResults(current => current.map((item, currentIndex) => currentIndex === index ? { b64_json: out.imageBase64 } : item))
       setImageSizes(current => ({ ...current, [index]: `${out.width} × ${out.height}px` }))
+      setUpscaleResponseJson(JSON.stringify(out.responseJson || {
+        width: out.width,
+        height: out.height,
+      }, null, 2))
       showToast(`已放大至 ${out.width} × ${out.height}`, 'success')
     }
     catch (error) {
-      showToast(`放大失败: ${(error as Error).message}`, 'error')
+      const message = getErrorMessage(error)
+      setUpscaleResponseJson(JSON.stringify({ error: message }, null, 2))
+      showToast(`放大失败: ${message}`, 'error')
     }
     finally {
       setUpscalingIndex(null)
@@ -710,6 +833,7 @@ export default function App() {
       resolution: record.params.resolution,
     })
     setRequestJson(record.requestJson || '无')
+    setUpscaleResponseJson('无')
 
     if (models.some(model => model.id === record.modelId))
       selectModel(record.modelId)
@@ -717,6 +841,9 @@ export default function App() {
     const restored: ResultImage[] = []
     for (const blob of record.images || [])
       restored.push({ b64_json: await blobToBase64(blob) })
+    setImageSizes({})
+    setCopiedIndex(null)
+    setDownloadedIndex(null)
     setResults(restored)
     setView('workspace')
     showToast('已恢复历史记录', 'success')
@@ -753,7 +880,7 @@ export default function App() {
       await refreshHistory()
     }
     catch (error) {
-      showToast(`设置目录失败: ${(error as Error).message}`, 'error')
+      showToast(`设置目录失败: ${getErrorMessage(error)}`, 'error')
     }
     finally {
       setHistoryDirPending(false)
@@ -765,7 +892,7 @@ export default function App() {
       await openHistoryDirectory()
     }
     catch (error) {
-      showToast(`打开目录失败: ${(error as Error).message}`, 'error')
+      showToast(`打开目录失败: ${getErrorMessage(error)}`, 'error')
     }
   }
 
@@ -1124,8 +1251,8 @@ export default function App() {
                                     <button
                                       className="dl-btn result-upscale-btn"
                                       type="button"
-                                      disabled={!normalizeBaseUrl(upscaleConfig.apiUrl) || upscalingIndex !== null}
-                                      title={!normalizeBaseUrl(upscaleConfig.apiUrl) ? '请先在设置页配置放大服务' : ''}
+                                      disabled={!isUpscaleProviderConfigured(currentUpscaleProvider) || upscalingIndex !== null}
+                                      title={!isUpscaleProviderConfigured(currentUpscaleProvider) ? '请先在设置页配置放大服务' : ''}
                                       onClick={() => void handleUpscale(index)}
                                     >
                                       {upscalingIndex === index ? '放大中…' : '提升分辨率'}
@@ -1140,8 +1267,13 @@ export default function App() {
           </div>
 
           <details className="panel request-panel">
-            <summary>上次请求 JSON</summary>
+            <summary>生图请求 JSON</summary>
             <pre>{requestJson}</pre>
+          </details>
+
+          <details className="panel request-panel">
+            <summary>图片超分响应 JSON</summary>
+            <pre>{upscaleResponseJson}</pre>
           </details>
         </div>
       </div>
@@ -1223,40 +1355,55 @@ export default function App() {
               )}
         </section>
 
-        <section className="panel settings-panel">
+        <section className="panel settings-panel upscale-section">
           <div className="panel-heading">
             <div>
-              <h2>放大服务</h2>
-              <div className="panel-caption">配置用于提升图片分辨率的自建放大服务端点。</div>
+              <h2>图像超分</h2>
+              <div className="panel-caption">管理超分服务配置，结果区会使用当前选中的服务提升图片分辨率。</div>
             </div>
+            <button type="button" onClick={openCreateUpscaleModal}>+ 新增超分服务</button>
           </div>
-          <div className="row">
-            <div>
-              <label htmlFor="upscaleUrl">服务地址</label>
-              <input
-                id="upscaleUrl"
-                value={upscaleConfig.apiUrl}
-                placeholder="https://your-upscale.com/upscale"
-                onChange={event => setUpscaleConfig(current => ({ ...current, apiUrl: event.target.value }))}
-              />
-            </div>
-          </div>
-          <div className="row">
-            <div>
-              <label htmlFor="upscaleKey">访问密钥</label>
-              <input
-                id="upscaleKey"
-                type="password"
-                value={upscaleConfig.apiKey}
-                placeholder="可选"
-                onChange={event => setUpscaleConfig(current => ({ ...current, apiKey: event.target.value }))}
-              />
-            </div>
-          </div>
+
+          {!upscaleProviders.length
+            ? (
+                <div className="empty" style={{ padding: '32px 0' }}>
+                  <div className="empty-icon">▣</div>
+                  <div className="empty-text">暂无超分服务配置</div>
+                  <div className="empty-hint">点击右上角"+ 新增超分服务"开始配置</div>
+                </div>
+              )
+            : (
+                <div className="provider-list">
+                  {upscaleProviders.map(p => (
+                    <div key={p.id} className={`provider-list-row${p.id === currentUpscaleProviderId ? ' active' : ''}`}>
+                      <div
+                        className="provider-list-main"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => onUpscaleProviderChange(p.id)}
+                        onKeyDown={e => e.key === 'Enter' && onUpscaleProviderChange(p.id)}
+                      >
+                        <div className="provider-list-name">{p.name}</div>
+                        <div className="provider-list-url">{getUpscaleProviderSummary(p)}</div>
+                      </div>
+                      <div className="provider-list-meta">
+                        <span className="badge-key">{getUpscaleProviderTypeLabel(p.provider)}</span>
+                        {p.id === currentUpscaleProviderId && <span className="badge-in-use">使用中</span>}
+                        {isUpscaleProviderConfigured(p) ? <span className="badge-key">已配置</span> : null}
+                      </div>
+                      <div className="provider-list-actions">
+                        <button className="secondary" type="button" onClick={() => openEditUpscaleModal(p)}>编辑</button>
+                        <button className="secondary danger" type="button" onClick={() => removeUpscaleProvider(p.id)}>删除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
           <div className="settings-summary-list">
             <div className="settings-summary-row">
-              <span>服务状态</span>
-              <strong>{upscaleConfig.apiUrl ? '已配置' : '未配置'}</strong>
+              <span>当前超分服务</span>
+              <strong>{currentUpscaleProvider ? `${currentUpscaleProvider.name} · ${getUpscaleProviderTypeLabel(currentUpscaleProvider.provider)}` : '未选择'}</strong>
             </div>
           </div>
         </section>
@@ -1465,20 +1612,7 @@ export default function App() {
                       title={keyVisible ? '隐藏密钥' : '显示密钥'}
                       onClick={() => setKeyVisible(v => !v)}
                     >
-                      {keyVisible
-                        ? (
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                              <line x1="1" y1="1" x2="23" y2="23" />
-                            </svg>
-                          )
-                        : (
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          )}
+                      <VisibilityIcon hidden={keyVisible} />
                     </button>
                   </div>
                 </div>
@@ -1508,6 +1642,137 @@ export default function App() {
         </div>
       )}
 
+      {upscaleModalOpen && (
+        <div className="provider-modal-overlay" onClick={closeUpscaleModal}>
+          <div className="provider-modal-dialog" onClick={event => event.stopPropagation()}>
+            <div className="provider-modal-header">
+              <h3>{upscaleModalMode === 'create' ? '新增超分服务' : '编辑超分服务'}</h3>
+              <button className="provider-modal-close" type="button" onClick={closeUpscaleModal}>✕</button>
+            </div>
+            <div className="provider-modal-body">
+              <div className="row">
+                <div>
+                  <label htmlFor="modalUpscaleName">服务名称</label>
+                  <input
+                    id="modalUpscaleName"
+                    value={upscaleProviderDraft.name}
+                    placeholder="例如：阿里云主账号"
+                    autoFocus
+                    onChange={event => updateUpscaleProviderDraft('name', event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="row">
+                <div>
+                  <label>服务类型</label>
+                  <div className="upscale-provider-tabs">
+                    <button
+                      type="button"
+                      className={`chip ${upscaleProviderDraft.provider === 'aliyun' ? 'active' : ''}`}
+                      disabled={!isDesktopApp()}
+                      title={!isDesktopApp() ? '阿里云超分仅桌面端可用' : ''}
+                      onClick={() => updateUpscaleProviderDraft('provider', 'aliyun')}
+                    >
+                      阿里云
+                    </button>
+                    <button
+                      type="button"
+                      className={`chip ${upscaleProviderDraft.provider === 'custom' ? 'active' : ''}`}
+                      onClick={() => updateUpscaleProviderDraft('provider', 'custom')}
+                    >
+                      自定义
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {upscaleProviderDraft.provider === 'aliyun'
+                ? (
+                    <>
+                      <div className="row">
+                        <div>
+                          <label htmlFor="modalAliyunKeyId">AccessKey ID</label>
+                          <input
+                            id="modalAliyunKeyId"
+                            value={upscaleProviderDraft.accessKeyId}
+                            placeholder="填入 AccessKey ID"
+                            onChange={event => updateUpscaleProviderDraft('accessKeyId', event.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="row">
+                        <div>
+                          <label htmlFor="modalAliyunKeySecret">AccessKey Secret</label>
+                          <div className="key-input-wrap">
+                            <input
+                              id="modalAliyunKeySecret"
+                              type={upscaleKeyVisible ? 'text' : 'password'}
+                              value={upscaleProviderDraft.accessKeySecret}
+                              placeholder="填入 AccessKey Secret"
+                              onChange={event => updateUpscaleProviderDraft('accessKeySecret', event.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="key-eye-btn"
+                              onClick={() => setUpscaleKeyVisible(v => !v)}
+                              title={upscaleKeyVisible ? '隐藏密钥' : '显示密钥'}
+                            >
+                              <VisibilityIcon hidden={upscaleKeyVisible} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )
+                : (
+                    <>
+                      <div className="row">
+                        <div>
+                          <label htmlFor="modalUpscaleUrl">服务地址</label>
+                          <input
+                            id="modalUpscaleUrl"
+                            value={upscaleProviderDraft.apiUrl}
+                            placeholder="https://your-upscale.com/upscale"
+                            onChange={event => updateUpscaleProviderDraft('apiUrl', event.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="row">
+                        <div>
+                          <label htmlFor="modalUpscaleKey">访问密钥</label>
+                          <div className="key-input-wrap">
+                            <input
+                              id="modalUpscaleKey"
+                              type={upscaleKeyVisible ? 'text' : 'password'}
+                              value={upscaleProviderDraft.apiKey}
+                              placeholder="可选"
+                              onChange={event => updateUpscaleProviderDraft('apiKey', event.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="key-eye-btn"
+                              onClick={() => setUpscaleKeyVisible(v => !v)}
+                              title={upscaleKeyVisible ? '隐藏密钥' : '显示密钥'}
+                            >
+                              <VisibilityIcon hidden={upscaleKeyVisible} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+              {renderStatus(connStatus)}
+            </div>
+            <div className="provider-modal-footer">
+              <button className="secondary" type="button" onClick={closeUpscaleModal}>取消</button>
+              <button type="button" onClick={handleSaveUpscaleProviderModal}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className={`toast ${toast ? `show ${toast.type}` : ''}`}>{toast?.message}</div>
     </>
   )
@@ -1519,6 +1784,53 @@ function parseImageSize(text: string | undefined) {
   if (!match)
     return null
   return { width: Number(match[1]), height: Number(match[2]) }
+}
+
+function makeEmptyUpscaleProvider(provider: UpscaleProvider = 'aliyun'): UpscaleProviderConfig {
+  return {
+    id: '',
+    name: '',
+    provider,
+    accessKeyId: '',
+    accessKeySecret: '',
+    apiUrl: '',
+    apiKey: '',
+  }
+}
+
+function getUpscaleProviderTypeLabel(provider: UpscaleProvider) {
+  return provider === 'aliyun' ? '阿里云' : '自定义'
+}
+
+function getUpscaleProviderSummary(provider: UpscaleProviderConfig) {
+  if (provider.provider === 'aliyun')
+    return provider.accessKeyId ? `AccessKey ID：${maskValue(provider.accessKeyId)}` : '未填写 AccessKey ID'
+  return provider.apiUrl || '未填写服务地址'
+}
+
+function maskValue(value: string) {
+  if (value.length <= 8)
+    return value ? '••••' : ''
+  return `${value.slice(0, 4)}••••${value.slice(-4)}`
+}
+
+function VisibilityIcon({ hidden }: { hidden: boolean }) {
+  if (hidden) {
+    return (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+        <line x1="1" y1="1" x2="23" y2="23" />
+      </svg>
+    )
+  }
+
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
 }
 
 function parseSize(size: string) {

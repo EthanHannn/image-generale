@@ -1028,6 +1028,10 @@ button {
   grid-column: 1 / -1;
 }
 
+.upscale-section {
+  grid-column: 1 / -1;
+}
+
 .provider-list {
   display: flex;
   flex-direction: column;
@@ -1832,6 +1836,17 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.upscale-provider-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.upscale-provider-tabs .chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .result-upscale-row {
