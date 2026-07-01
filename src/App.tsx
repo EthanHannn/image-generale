@@ -1326,60 +1326,36 @@ export default function App() {
             : null}
         </div>
         <aside className="shell-sidebar">
-          <div className="brand-block">
-            <div className="logo">◈</div>
-            <div>
-              <div className="brand-title">Image Generator</div>
-              <div className="brand-sub">Desktop Workspace</div>
-            </div>
-          </div>
           <nav className="shell-nav">
             {navItems.map(item => (
               <button
                 key={item.id}
                 type="button"
                 className={`shell-nav-item ${view === item.id ? 'active' : ''}`}
+                title={item.label}
                 onClick={() => setView(item.id)}
               >
                 <span className="shell-nav-icon">{item.icon}</span>
-                <span className="shell-nav-copy">
-                  <strong>{item.label}</strong>
-                  <span>{item.hint}</span>
-                </span>
               </button>
             ))}
           </nav>
 
-          <div className="sidebar-context">
-            <div className="sidebar-card">
-              <span className="sidebar-card-label">当前供应商</span>
-              <strong>{currentProvider?.name || '未选择供应商'}</strong>
-              <span>{currentProvider?.apiUrl || '请先配置供应商'}</span>
-            </div>
-            <div className="sidebar-card compact">
-              <span className="sidebar-card-label">本地状态</span>
-              <div className="sidebar-stats">
-                <span>{providers.length} 个供应商</span>
-                <span>{historyRecords.length} 条历史</span>
-                <span>{formatSize(storageUsed)}</span>
-              </div>
-            </div>
-          </div>
-
           <div className="sidebar-footer">
-            <button className="theme-toggle full" type="button" onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}>
-              <span className="icon-moon">◐</span>
-              <span className="toggle-knob">{theme === 'dark' ? '☾' : '☀'}</span>
-              <span className="icon-sun">◑</span>
+            <button
+              className="theme-toggle-icon"
+              type="button"
+              title={theme === 'dark' ? '切换到浅色' : '切换到深色'}
+              onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? '☀' : '☾'}
             </button>
-            <div className="sidebar-footnote">简约、现代、可持续扩展的桌面工作台骨架。</div>
           </div>
         </aside>
 
         <main className="shell-main">
           <div className="view-header">
             <div>
-              <div className="view-kicker">Desktop Refactor / Step 3</div>
+              <div className="view-kicker">Image Generator</div>
               <h1>{viewTitle}</h1>
               <p>{viewDesc}</p>
             </div>
