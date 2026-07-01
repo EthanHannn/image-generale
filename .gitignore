@@ -33,4 +33,4 @@ CLAUDE.md
 # 文档发布控制
 docs/*
 !docs/
-!docs/desktop-design-guidelines.md
+!docs/ui-ux-specification-document.md
