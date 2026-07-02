@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { ChangeEvent, DragEvent } from 'react'
+import type { ChangeEvent, DragEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -45,6 +45,24 @@ type ViewName = 'workspace' | 'upscale' | 'history' | 'settings'
 type UpscaleFactor = 1 | 2 | 3 | 4
 type StandaloneUpscaleFactor = 2 | 3 | 4
 type ImageDimensions = { width: number; height: number }
+type ImagePreviewState = {
+  image: string
+  title: string
+  mode: 'single' | 'compare'
+  split: number
+  zoom: number
+  fitZoom: number
+  offsetX: number
+  offsetY: number
+  singleSide: 'before' | 'after'
+  sideFitZooms: Partial<Record<'before' | 'after', number>>
+  compare?: {
+    before: string
+    after: string
+    beforeLabel: string
+    afterLabel: string
+  }
+}
 type HistoryFavoriteFilter = 'all' | 'favorites'
 type HistoryModeFilter = 'all' | 'gen' | 'edit' | 'upscale'
 type TargetSizeMode = 'ratio' | 'manual'
@@ -79,6 +97,14 @@ type UpscaleOptions = {
   recordId?: number | null
   auto?: boolean
 }
+type StandaloneUpscaleVariant = {
+  outputBase64: string
+  outputWidth: number
+  outputHeight: number
+  duration: string
+  responseJson: string
+  activeRecordId: number | null
+}
 type StandaloneUpscaleState = {
   fileName: string
   fileSize: number
@@ -94,6 +120,7 @@ type StandaloneUpscaleState = {
   responseJson: string
   activeRecordId: number | null
   isProcessing: boolean
+  completedFactors: Partial<Record<StandaloneUpscaleFactor, StandaloneUpscaleVariant>>
 }
 
 const GENERATION_MAX_AREA = 1024 * 1024
@@ -133,6 +160,7 @@ const defaultStandaloneUpscaleState: StandaloneUpscaleState = {
   responseJson: '无',
   activeRecordId: null,
   isProcessing: false,
+  completedFactors: {},
 }
 
 const defaultTargetSize: TargetSizeState = {
@@ -167,6 +195,7 @@ export default function App() {
   const timerRef = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const modalDirtyRef = useRef(false)
+  const previewPanRef = useRef<{ x: number; y: number } | null>(null)
 
   const [theme, setTheme] = useState<ThemeName>(getInitialTheme)
   const [providers, setProviders] = useState<ProviderConfig[]>(initialConfig.providers)
@@ -203,7 +232,8 @@ export default function App() {
   const [originalImageSizes, setOriginalImageSizes] = useState<Record<number, ImageDimensions>>({})
   const [downloadedIndex, setDownloadedIndex] = useState<number | null>(null)
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
-  const [previewImage, setPreviewImage] = useState('')
+  const [previewImage, setPreviewImage] = useState<ImagePreviewState | null>(null)
+  const [previewDragging, setPreviewDragging] = useState(false)
 
   const [upscaleProviders, setUpscaleProviders] = useState<UpscaleProviderConfig[]>(initialUpscaleStore.providers)
   const [currentUpscaleProviderId, setCurrentUpscaleProviderId] = useState(initialUpscaleStore.currentProviderId)
@@ -358,7 +388,7 @@ export default function App() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape')
-        setPreviewImage('')
+        closeImagePreview()
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
@@ -388,6 +418,195 @@ export default function App() {
 
   function cancelGeneration() {
     abortControllerRef.current?.abort()
+  }
+
+  function openImagePreview(
+    image: string,
+    title: string,
+    compare?: ImagePreviewState['compare'],
+  ) {
+    setPreviewDragging(false)
+    const singleSide = compare && image === compare.before ? 'before' : 'after'
+    setPreviewImage({
+      image,
+      title,
+      mode: compare ? 'compare' : 'single',
+      split: 50,
+      zoom: 1,
+      fitZoom: 1,
+      offsetX: 0,
+      offsetY: 0,
+      singleSide: compare ? 'before' : singleSide,
+      sideFitZooms: {},
+      compare,
+    })
+  }
+
+  function closeImagePreview() {
+    setPreviewDragging(false)
+    previewPanRef.current = null
+    setPreviewImage(null)
+  }
+
+  function resetPreviewSplit() {
+    setPreviewImage(current => current && current.compare ? { ...current, split: 50 } : current)
+  }
+
+  function resetSinglePreviewTransform() {
+    previewPanRef.current = null
+    setPreviewImage(current => current ? { ...current, zoom: current.fitZoom, offsetX: 0, offsetY: 0 } : current)
+  }
+
+  function selectSinglePreviewSide(side: 'before' | 'after') {
+    previewPanRef.current = null
+    setPreviewImage(current => current && current.compare
+      ? (() => {
+          const nextFitZoom = current.sideFitZooms[side] || current.fitZoom
+          return {
+            ...current,
+            singleSide: side,
+            image: side === 'before' ? current.compare.before : current.compare.after,
+            zoom: nextFitZoom,
+            fitZoom: nextFitZoom,
+            offsetX: 0,
+            offsetY: 0,
+          }
+        })()
+      : current)
+  }
+
+  function updateSinglePreviewZoom(nextZoom: number) {
+    previewPanRef.current = null
+    setPreviewImage((current) => {
+      if (!current)
+        return current
+      const zoom = Math.min(6, Math.max(0.01, nextZoom))
+      const isFitZoom = Math.abs(zoom - current.fitZoom) < 0.001
+      return {
+        ...current,
+        zoom,
+        offsetX: isFitZoom ? 0 : current.offsetX,
+        offsetY: isFitZoom ? 0 : current.offsetY,
+      }
+    })
+  }
+
+  function stepSinglePreviewZoom(direction: 1 | -1) {
+    if (!previewImage)
+      return
+    const step = previewImage.zoom < 0.5 ? 0.05 : previewImage.zoom < 1 ? 0.1 : 0.25
+    updateSinglePreviewZoom(previewImage.zoom + direction * step)
+  }
+
+  function handleSinglePreviewWheel(event: WheelEvent<HTMLDivElement>) {
+    if (!previewImage || previewImage.mode !== 'single')
+      return
+    event.preventDefault()
+    const delta = event.deltaY > 0 ? -0.08 : 0.08
+    updateSinglePreviewZoom(previewImage.zoom + delta)
+  }
+
+  function handleSinglePreviewPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (!previewImage || previewImage.mode !== 'single' || Math.abs(previewImage.zoom - previewImage.fitZoom) < 0.001)
+      return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    previewPanRef.current = { x: event.clientX, y: event.clientY }
+  }
+
+  function handleSinglePreviewPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (!previewImage || previewImage.mode !== 'single' || Math.abs(previewImage.zoom - previewImage.fitZoom) < 0.001 || !previewPanRef.current)
+      return
+    const deltaX = event.clientX - previewPanRef.current.x
+    const deltaY = event.clientY - previewPanRef.current.y
+    previewPanRef.current = { x: event.clientX, y: event.clientY }
+    setPreviewImage(current => current
+      ? {
+          ...current,
+          offsetX: current.offsetX + deltaX,
+          offsetY: current.offsetY + deltaY,
+        }
+      : current)
+  }
+
+  function handleSinglePreviewPointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    previewPanRef.current = null
+  }
+
+  function handleSinglePreviewImageLoad(event: SyntheticEvent<HTMLImageElement>, side?: 'before' | 'after') {
+    const image = event.currentTarget
+    const viewport = image.parentElement
+    if (!viewport || !image.naturalWidth || !image.naturalHeight)
+      return
+
+    const rect = viewport.getBoundingClientRect()
+    const fitZoom = Math.min(1, rect.width / image.naturalWidth, rect.height / image.naturalHeight)
+    const normalizedFitZoom = Number.isFinite(fitZoom) && fitZoom > 0 ? Math.max(0.01, fitZoom) : 1
+    setPreviewImage((current) => {
+      if (!current)
+        return current
+
+      const currentSource = current.compare && side
+        ? side === 'before'
+          ? current.compare.before
+          : current.compare.after
+        : current.image
+      if (image.src !== currentSource)
+        return current
+
+      if (current.compare && side && side !== current.singleSide) {
+        return {
+          ...current,
+          sideFitZooms: {
+            ...current.sideFitZooms,
+            [side]: normalizedFitZoom,
+          },
+        }
+      }
+
+      return {
+        ...current,
+        fitZoom: normalizedFitZoom,
+        zoom: normalizedFitZoom,
+        offsetX: 0,
+        offsetY: 0,
+        sideFitZooms: current.compare
+          ? {
+              ...current.sideFitZooms,
+              [side || current.singleSide]: normalizedFitZoom,
+            }
+          : current.sideFitZooms,
+      }
+    })
+  }
+
+  function updatePreviewSplit(clientX: number, target: HTMLDivElement) {
+    const rect = target.getBoundingClientRect()
+    if (!rect.width)
+      return
+    const next = Math.min(85, Math.max(15, ((clientX - rect.left) / rect.width) * 100))
+    setPreviewImage(current => current && current.compare ? { ...current, split: next } : current)
+  }
+
+  function handlePreviewPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (!previewImage?.compare)
+      return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setPreviewDragging(true)
+    updatePreviewSplit(event.clientX, event.currentTarget)
+  }
+
+  function handlePreviewPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (!previewDragging || !previewImage?.compare)
+      return
+    updatePreviewSplit(event.clientX, event.currentTarget)
+  }
+
+  function handlePreviewPointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    setPreviewDragging(false)
   }
 
   function updateProviderDraft<K extends keyof ProviderConfig>(key: K, value: ProviderConfig[K]) {
@@ -1192,12 +1411,12 @@ export default function App() {
     setStandaloneUpscale(current => ({
       ...current,
       factor,
-      outputBase64: '',
-      outputWidth: 0,
-      outputHeight: 0,
-      duration: '',
-      responseJson: '无',
-      activeRecordId: null,
+      outputBase64: current.completedFactors[factor]?.outputBase64 || '',
+      outputWidth: current.completedFactors[factor]?.outputWidth || 0,
+      outputHeight: current.completedFactors[factor]?.outputHeight || 0,
+      duration: current.completedFactors[factor]?.duration || '',
+      responseJson: current.completedFactors[factor]?.responseJson || '无',
+      activeRecordId: current.completedFactors[factor]?.activeRecordId || null,
     }))
   }
 
@@ -1299,6 +1518,17 @@ export default function App() {
         responseJson,
         activeRecordId: recordId || null,
         isProcessing: false,
+        completedFactors: {
+          ...current.completedFactors,
+          [standaloneUpscale.factor]: {
+            outputBase64: out.imageBase64,
+            outputWidth: out.width,
+            outputHeight: out.height,
+            duration,
+            responseJson,
+            activeRecordId: recordId || null,
+          },
+        },
       }))
       showToast(`已超分至 ${out.width} × ${out.height}`, 'success')
     }
@@ -1339,6 +1569,9 @@ export default function App() {
       const outputBlob = record.upscaledImages?.[0]?.[factor]
       const sourceBase64 = await blobToBase64(sourceBlob)
       const outputBase64 = outputBlob ? await blobToBase64(outputBlob) : ''
+      const outputWidth = record.params.outputWidth || record.params.targetWidth || 0
+      const outputHeight = record.params.outputHeight || record.params.targetHeight || 0
+      const responseJson = record.requestJson || '无'
       setStandaloneUpscale({
         fileName: record.params.sourceFileName || record.prompt || '历史图片',
         fileSize: record.params.sourceFileSize || sourceBlob.size,
@@ -1348,12 +1581,24 @@ export default function App() {
         sourceHeight: record.params.sourceHeight || 0,
         factor,
         outputBase64,
-        outputWidth: record.params.outputWidth || record.params.targetWidth || 0,
-        outputHeight: record.params.outputHeight || record.params.targetHeight || 0,
+        outputWidth,
+        outputHeight,
         duration: record.duration || '',
-        responseJson: record.requestJson || '无',
+        responseJson,
         activeRecordId: record.id || null,
         isProcessing: false,
+        completedFactors: outputBase64
+          ? {
+              [factor]: {
+                outputBase64,
+                outputWidth,
+                outputHeight,
+                duration: record.duration || '',
+                responseJson,
+                activeRecordId: record.id || null,
+              },
+            }
+          : {},
       })
       setActiveHistoryRecordId(null)
       setView('upscale')
@@ -1922,6 +2167,7 @@ export default function App() {
                       const selectedVariant = resultUpscaleVariants[index]?.[selectedFactor]
                       const selectedBase64 = selectedFactor === 1 ? image.b64_json : selectedVariant
                       const source = selectedBase64 ? `data:image/png;base64,${selectedBase64}` : image.b64_json ? `data:image/png;base64,${image.b64_json}` : image.url || ''
+                      const originalSource = image.b64_json ? `data:image/png;base64,${image.b64_json}` : ''
                       const isUpscaleConfigured = isUpscaleProviderConfigured(currentUpscaleProvider)
                       const isAutoUpscaling = !!autoUpscalingIndexes[index]
                       const hasSelectedVariant = selectedFactor > 1 && !!selectedVariant
@@ -1954,7 +2200,18 @@ export default function App() {
                                     src={source}
                                     alt={`结果 ${index + 1}`}
                                     loading="lazy"
-                                    onClick={() => setPreviewImage(source)}
+                                    onClick={() => openImagePreview(
+                                      source,
+                                      `结果 #${index + 1}`,
+                                      hasSelectedVariant && originalSource
+                                        ? {
+                                            before: originalSource,
+                                            after: source,
+                                            beforeLabel: '1X 原图',
+                                            afterLabel: `${selectedFactor}X 超分图`,
+                                          }
+                                        : undefined,
+                                    )}
                                     onLoad={(event) => {
                                       const target = event.currentTarget
                                       const dimensions = { width: target.naturalWidth, height: target.naturalHeight }
@@ -1987,7 +2244,7 @@ export default function App() {
                                         <button
                                           key={factor}
                                           type="button"
-                                          className={`chip ${selectedFactor === factor ? 'active' : ''}`}
+                                          className={`chip ${selectedFactor === factor ? 'active' : ''} ${factor > 1 && resultUpscaleVariants[index]?.[factor] ? 'completed' : ''}`}
                                           disabled={upscalingIndex === index}
                                           onClick={() => setSelectedUpscaleFactors(current => ({ ...current, [index]: factor }))}
                                         >
@@ -2090,7 +2347,7 @@ export default function App() {
               {([2, 3, 4] as StandaloneUpscaleFactor[]).map(factor => (
                 <button
                   key={factor}
-                  className={`chip ${standaloneUpscale.factor === factor ? 'active' : ''}`}
+                  className={`chip ${standaloneUpscale.factor === factor ? 'active' : ''} ${standaloneUpscale.completedFactors[factor] ? 'completed' : ''}`}
                   type="button"
                   disabled={standaloneUpscale.isProcessing}
                   onClick={() => setStandaloneFactor(factor)}
@@ -2132,7 +2389,24 @@ export default function App() {
                 <span>{hasSource ? formatImageDimensions({ width: standaloneUpscale.sourceWidth, height: standaloneUpscale.sourceHeight }) : '-'}</span>
               </div>
               {sourceUrl
-                ? <img src={sourceUrl} alt="独立超分原图" onClick={() => setPreviewImage(sourceUrl)} />
+                ? (
+                    <img
+                      src={sourceUrl}
+                      alt="独立超分原图"
+                      onClick={() => openImagePreview(
+                        sourceUrl,
+                        '独立超分',
+                        outputUrl
+                          ? {
+                              before: sourceUrl,
+                              after: outputUrl,
+                              beforeLabel: '原图',
+                              afterLabel: `${standaloneUpscale.factor}X 超分图`,
+                            }
+                          : undefined,
+                      )}
+                    />
+                  )
                 : (
                     <div className="standalone-preview-empty">
                       <strong>暂无图片</strong>
@@ -2147,7 +2421,24 @@ export default function App() {
                 <span>{outputUrl ? formatImageDimensions({ width: standaloneUpscale.outputWidth, height: standaloneUpscale.outputHeight }) : hasSource ? `预计 ${targetWidth} × ${targetHeight}px` : '-'}</span>
               </div>
               {outputUrl
-                ? <img src={outputUrl} alt="独立超分结果" onClick={() => setPreviewImage(outputUrl)} />
+                ? (
+                    <img
+                      src={outputUrl}
+                      alt="独立超分结果"
+                      onClick={() => openImagePreview(
+                        outputUrl,
+                        '独立超分',
+                        sourceUrl
+                          ? {
+                              before: sourceUrl,
+                              after: outputUrl,
+                              beforeLabel: '原图',
+                              afterLabel: `${standaloneUpscale.factor}X 超分图`,
+                            }
+                          : undefined,
+                      )}
+                    />
+                  )
                 : (
                     <div className="standalone-preview-empty">
                       <strong>{standaloneUpscale.isProcessing ? '处理中' : '等待超分'}</strong>
@@ -2466,9 +2757,164 @@ export default function App() {
         </main>
       </div>
 
-      <div className={`img-modal ${previewImage ? 'active' : ''}`} onClick={() => setPreviewImage('')}>
-        <button className="modal-close" type="button" onClick={() => setPreviewImage('')}>✕</button>
-        {previewImage ? <img src={previewImage} alt="预览" onClick={event => event.stopPropagation()} /> : null}
+      <div className={`img-modal ${previewImage ? 'active' : ''}`} onClick={closeImagePreview}>
+        <button className="modal-close" type="button" onClick={closeImagePreview}>✕</button>
+        {previewImage
+          ? (
+              <div className="preview-dialog" onClick={event => event.stopPropagation()}>
+                <div className="preview-toolbar">
+                  <div>
+                    <strong>{previewImage.title}</strong>
+                    <span>
+                      {previewImage.compare
+                        ? previewImage.mode === 'compare'
+                          ? `${previewImage.compare.beforeLabel} / ${previewImage.compare.afterLabel}`
+                          : '单图预览'
+                        : '单图预览'}
+                    </span>
+                  </div>
+                  <div className="preview-actions">
+                    {previewImage.compare
+                      ? (
+                          <div className="preview-mode-row">
+                            <button
+                              className={`chip ${previewImage.mode === 'single' ? 'active' : ''}`}
+                              type="button"
+                              onClick={() => setPreviewImage(current => current ? { ...current, mode: 'single', zoom: current.fitZoom, offsetX: 0, offsetY: 0 } : current)}
+                            >
+                              单图
+                            </button>
+                            <button
+                              className={`chip ${previewImage.mode === 'compare' ? 'active' : ''}`}
+                              type="button"
+                              onClick={() => setPreviewImage(current => current ? { ...current, mode: 'compare', zoom: current.fitZoom, offsetX: 0, offsetY: 0 } : current)}
+                            >
+                              对比
+                            </button>
+                          </div>
+                        )
+                      : null}
+                    {previewImage.mode === 'single'
+                      ? (
+                          <>
+                            {previewImage.compare
+                              ? (
+                                  <div className="preview-side-row">
+                                    <button
+                                      className={previewImage.singleSide === 'before' ? 'active' : ''}
+                                      type="button"
+                                      onClick={() => selectSinglePreviewSide('before')}
+                                    >
+                                      {previewImage.compare.beforeLabel}
+                                    </button>
+                                    <button
+                                      className={previewImage.singleSide === 'after' ? 'active' : ''}
+                                      type="button"
+                                      onClick={() => selectSinglePreviewSide('after')}
+                                    >
+                                      {previewImage.compare.afterLabel}
+                                    </button>
+                                  </div>
+                                )
+                              : null}
+                            <div className="preview-zoom-row">
+                              <button type="button" onClick={() => stepSinglePreviewZoom(-1)} disabled={previewImage.zoom <= 0.01}>-</button>
+                              <span>{Math.round(previewImage.zoom * 100)}%</span>
+                              <button type="button" onClick={() => stepSinglePreviewZoom(1)} disabled={previewImage.zoom >= 6}>+</button>
+                              <button type="button" onClick={resetSinglePreviewTransform}>适应</button>
+                            </div>
+                          </>
+                        )
+                      : null}
+                  </div>
+                </div>
+
+                <div className="preview-stage">
+                  {previewImage.compare && previewImage.mode === 'compare'
+                    ? (
+                        <div
+                          className="compare-view"
+                          onDoubleClick={resetPreviewSplit}
+                          onPointerDown={handlePreviewPointerDown}
+                          onPointerMove={handlePreviewPointerMove}
+                          onPointerUp={handlePreviewPointerUp}
+                          onPointerCancel={handlePreviewPointerUp}
+                        >
+                          <img
+                            className="compare-img"
+                            src={previewImage.compare.before}
+                            alt={previewImage.compare.beforeLabel}
+                            draggable={false}
+                            onLoad={event => handleSinglePreviewImageLoad(event, 'before')}
+                          />
+                          <img
+                            className="compare-img compare-after"
+                            src={previewImage.compare.after}
+                            alt={previewImage.compare.afterLabel}
+                            draggable={false}
+                            onLoad={event => handleSinglePreviewImageLoad(event, 'after')}
+                            style={{ clipPath: `inset(0 0 0 ${previewImage.split}%)` }}
+                          />
+                          <div className="compare-label compare-label-before">{previewImage.compare.beforeLabel}</div>
+                          <div className="compare-label compare-label-after">{previewImage.compare.afterLabel}</div>
+                          <div className="compare-divider" style={{ left: `${previewImage.split}%` }}>
+                            <span />
+                          </div>
+                        </div>
+                      )
+                    : (
+                        <div
+                          className={`single-preview-view ${Math.abs(previewImage.zoom - previewImage.fitZoom) >= 0.001 ? 'is-zoomed' : ''}`}
+                          onWheel={handleSinglePreviewWheel}
+                          onPointerDown={handleSinglePreviewPointerDown}
+                          onPointerMove={handleSinglePreviewPointerMove}
+                          onPointerUp={handleSinglePreviewPointerUp}
+                          onPointerCancel={handleSinglePreviewPointerUp}
+                          onDoubleClick={resetSinglePreviewTransform}
+                        >
+                          {previewImage.compare
+                            ? (
+                                <>
+                                  <img
+                                    className={`preview-single-img ${previewImage.singleSide === 'before' ? 'active' : ''}`}
+                                    src={previewImage.compare.before}
+                                    alt={previewImage.compare.beforeLabel}
+                                    draggable={false}
+                                    onLoad={event => handleSinglePreviewImageLoad(event, 'before')}
+                                    style={{
+                                      transform: `translate(-50%, -50%) translate(${previewImage.singleSide === 'before' ? previewImage.offsetX : 0}px, ${previewImage.singleSide === 'before' ? previewImage.offsetY : 0}px) scale(${previewImage.singleSide === 'before' ? previewImage.zoom : previewImage.sideFitZooms.before || previewImage.fitZoom})`,
+                                    }}
+                                  />
+                                  <img
+                                    className={`preview-single-img ${previewImage.singleSide === 'after' ? 'active' : ''}`}
+                                    src={previewImage.compare.after}
+                                    alt={previewImage.compare.afterLabel}
+                                    draggable={false}
+                                    onLoad={event => handleSinglePreviewImageLoad(event, 'after')}
+                                    style={{
+                                      transform: `translate(-50%, -50%) translate(${previewImage.singleSide === 'after' ? previewImage.offsetX : 0}px, ${previewImage.singleSide === 'after' ? previewImage.offsetY : 0}px) scale(${previewImage.singleSide === 'after' ? previewImage.zoom : previewImage.sideFitZooms.after || previewImage.fitZoom})`,
+                                    }}
+                                  />
+                                </>
+                              )
+                            : (
+                                <img
+                                  className="preview-single-img active"
+                                  src={previewImage.image}
+                                  alt="预览"
+                                  draggable={false}
+                                  onLoad={handleSinglePreviewImageLoad}
+                                  style={{
+                                    transform: `translate(-50%, -50%) translate(${previewImage.offsetX}px, ${previewImage.offsetY}px) scale(${previewImage.zoom})`,
+                                  }}
+                                />
+                              )}
+                        </div>
+                      )}
+                </div>
+              </div>
+            )
+          : null}
       </div>
 
       {providerModalOpen && (
