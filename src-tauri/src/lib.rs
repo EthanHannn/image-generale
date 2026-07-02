@@ -122,6 +122,14 @@ struct RequestParams {
     auto_prompt: String,
     translate: String,
     resolution: Option<String>,
+    target_size_mode: Option<String>,
+    target_ratio: Option<String>,
+    target_width: Option<i64>,
+    target_height: Option<i64>,
+    generation_width: Option<i64>,
+    generation_height: Option<i64>,
+    auto_upscale: Option<bool>,
+    auto_upscale_factor: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

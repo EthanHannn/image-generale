@@ -24,6 +24,14 @@ export type RequestParams = {
   autoPrompt: string
   translate: string
   resolution?: string
+  targetSizeMode?: 'ratio' | 'manual'
+  targetRatio?: string
+  targetWidth?: number
+  targetHeight?: number
+  generationWidth?: number
+  generationHeight?: number
+  autoUpscale?: boolean
+  autoUpscaleFactor?: number
 }
 
 export type HistoryRecord = {

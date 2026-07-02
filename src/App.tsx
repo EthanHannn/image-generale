@@ -41,9 +41,49 @@ type ToastValue = { type: 'success' | 'error'; message: string } | null
 type ResultImage = { b64_json?: string; url?: string }
 type ResultPayload = { data?: ResultImage[]; error?: { message?: string } | string }
 type ViewName = 'workspace' | 'history' | 'settings'
-type SizeFilter = 'all' | 'square' | 'landscape' | 'portrait' | 'ultrawide'
 type UpscaleFactor = 1 | 2 | 3 | 4
+type TargetSizeMode = 'ratio' | 'manual'
+type TargetSizeState = {
+  mode: TargetSizeMode
+  ratioText: string
+  targetWidth: number
+  targetHeight: number
+  autoUpscale: boolean
+}
+type TargetSizeDraft = {
+  targetWidth: string
+  targetHeight: string
+}
+type SizePlan = {
+  targetWidth: number
+  targetHeight: number
+  generationWidth: number
+  generationHeight: number
+  requestSize: string
+  needsUpscale: boolean
+  autoUpscaleFactor: UpscaleFactor | null
+  canAutoUpscale: boolean
+  requiredScale: number
+}
+type SizePlanResult = { plan: SizePlan; error: null } | { plan: null; error: string }
+type UpscaleOptions = {
+  factor?: UpscaleFactor
+  targetWidth?: number
+  targetHeight?: number
+  sourceImage?: ResultImage
+  recordId?: number | null
+  auto?: boolean
+}
 
+const GENERATION_MAX_AREA = 1024 * 1024
+const TARGET_WIDTH_MIN = 256
+const TARGET_WIDTH_MAX = 8192
+const TARGET_SIZE_MIN = 64
+const TARGET_SIZE_MAX = 16384
+const SIZE_ALIGN = 8
+const COMMON_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9', '9:21']
+const COMMON_TARGET_WIDTHS = [512, 768, 1024, 1280, 1920, 2560, 3840, 4096]
+const COMMON_TARGET_HEIGHTS = [512, 720, 768, 1024, 1080, 1440, 2160, 3072]
 const ALIYUN_UPSCALE_MAX_BYTES = 20 * 1024 * 1024
 const ALIYUN_UPSCALE_MIN_SIDE = 64
 const ALIYUN_UPSCALE_MAX_LONG_SIDE = 5000
@@ -55,6 +95,19 @@ const emptyParams: RequestParams = {
   quality: 'auto',
   autoPrompt: 'false',
   translate: 'false',
+}
+
+const defaultTargetSize: TargetSizeState = {
+  mode: 'ratio',
+  ratioText: '1:1',
+  targetWidth: 1024,
+  targetHeight: 1024,
+  autoUpscale: false,
+}
+
+const defaultTargetSizeDraft: TargetSizeDraft = {
+  targetWidth: String(defaultTargetSize.targetWidth),
+  targetHeight: String(defaultTargetSize.targetHeight),
 }
 
 function getInitialTheme(): ThemeName {
@@ -98,7 +151,8 @@ export default function App() {
   const [mode, setMode] = useState<'gen' | 'edit'>('gen')
   const [prompt, setPrompt] = useState('')
   const [params, setParams] = useState<RequestParams>(emptyParams)
-  const [sizeFilter, setSizeFilter] = useState<SizeFilter>('all')
+  const [targetSize, setTargetSize] = useState<TargetSizeState>(defaultTargetSize)
+  const [targetSizeDraft, setTargetSizeDraft] = useState<TargetSizeDraft>(defaultTargetSizeDraft)
   const [refFiles, setRefFiles] = useState<File[]>([])
   const [requestJson, setRequestJson] = useState('无')
   const [upscaleResponseJson, setUpscaleResponseJson] = useState('无')
@@ -118,6 +172,7 @@ export default function App() {
   const [selectedUpscaleFactors, setSelectedUpscaleFactors] = useState<Record<number, UpscaleFactor>>({})
   const [resultUpscaleVariants, setResultUpscaleVariants] = useState<Record<number, Partial<Record<UpscaleFactor, string>>>>({})
   const [upscalingIndex, setUpscalingIndex] = useState<number | null>(null)
+  const [autoUpscalingIndexes, setAutoUpscalingIndexes] = useState<Record<number, boolean>>({})
 
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([])
   const [historySearch, setHistorySearch] = useState('')
@@ -140,9 +195,9 @@ export default function App() {
   const currentUpscaleProvider = upscaleProviders.find(provider => provider.id === currentUpscaleProviderId) || null
   const currentUpscaleConfig = upscaleProviderToConfig(currentUpscaleProvider)
   const currentModel = models.find(model => model.id === currentModelId) || null
-  const sizeOptions = getSortedSizes(currentModel?.supportedSizes || [])
   const resolutionOptions = currentModel?.supportedResolutions || []
-  const filteredSizeOptions = sizeOptions.filter(size => matchSizeFilter(size, sizeFilter))
+  const sizePlanResult = createSizePlan(targetSize)
+  const sizePlan = sizePlanResult.plan
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -192,6 +247,13 @@ export default function App() {
       return
     setCurrentUpscaleProviderId(upscaleProviders[0]?.id || '')
   }, [upscaleProviders, currentUpscaleProviderId])
+
+  useEffect(() => {
+    setTargetSizeDraft({
+      targetWidth: String(targetSize.targetWidth),
+      targetHeight: String(targetSize.targetHeight),
+    })
+  }, [targetSize.targetWidth, targetSize.targetHeight])
 
   useEffect(() => {
     if (providerModalOpen)
@@ -262,7 +324,7 @@ export default function App() {
     setDefaultModel('')
     setCurrentModelId('')
     setParams(emptyParams)
-    setSizeFilter('all')
+    setTargetSize(defaultTargetSize)
     setGenStatus(null)
   }
 
@@ -521,14 +583,16 @@ export default function App() {
       return
 
     setCurrentModelId(model.id)
-    setSizeFilter('all')
     const sizes = model.supportedSizes || []
     const sortedSizes = getSortedSizes(sizes)
     const resolutions = model.supportedResolutions || []
+    const nextTargetSize = makeTargetSizeFromPreset(model.defaultSize || sortedSizes[0] || '')
+    const nextSizePlan = createSizePlan(nextTargetSize).plan
+    setTargetSize(nextTargetSize)
     setParams(current => ({
       ...current,
       n: Math.min(current.n || 1, model.maxGenerations || 1),
-      size: model.defaultSize || sortedSizes[0] || '',
+      size: nextSizePlan?.requestSize || '1024x1024',
       resolution: model.hasResolution && resolutions.length ? (model.defaultResolution || resolutions[0] || '') : undefined,
     }))
   }
@@ -537,14 +601,117 @@ export default function App() {
     setRefFiles(files ? Array.from(files) : [])
   }
 
-  function handleSizeFilterChange(nextFilter: SizeFilter) {
-    setSizeFilter(nextFilter)
-    const nextSizes = sizeOptions.filter(size => matchSizeFilter(size, nextFilter))
-    const fallbackSize = nextSizes[0] || currentModel?.defaultSize || ''
-    setParams(current => ({
-      ...current,
-      size: nextSizes.includes(current.size) ? current.size : fallbackSize,
-    }))
+  function updateTargetSizeMode(mode: TargetSizeMode) {
+    setTargetSize((current) => {
+      if (mode === current.mode)
+        return current
+      if (mode === 'ratio') {
+        const ratioText = formatRatioFromSize(current.targetWidth, current.targetHeight)
+        const ratio = parseRatio(ratioText) || parseRatio(current.ratioText)
+        const next = ratio ? normalizeRatioSizeFromWidth(current.targetWidth, ratio) : null
+        return {
+          ...current,
+          mode,
+          ratioText,
+          targetWidth: next?.width ?? current.targetWidth,
+          targetHeight: next?.height ?? current.targetHeight,
+        }
+      }
+      return { ...current, mode }
+    })
+  }
+
+  function updateRatioText(ratioText: string) {
+    setTargetSize((current) => {
+      const ratio = parseRatio(ratioText)
+      const next = ratio ? normalizeRatioSizeFromWidth(current.targetWidth, ratio) : null
+      return {
+        ...current,
+        ratioText,
+        targetWidth: next?.width ?? current.targetWidth,
+        targetHeight: next?.height ?? current.targetHeight,
+      }
+    })
+  }
+
+  function updateTargetWidth(value: number) {
+    const targetWidth = clampInteger(value, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
+    setTargetSize((current) => {
+      if (current.mode === 'ratio') {
+        const ratio = parseRatio(current.ratioText)
+        if (ratio) {
+          const next = normalizeRatioSizeFromWidth(targetWidth, ratio)
+          return {
+            ...current,
+            targetWidth: next.width,
+            targetHeight: next.height,
+          }
+        }
+        return {
+          ...current,
+          targetWidth,
+          targetHeight: current.targetHeight,
+        }
+      }
+      return { ...current, targetWidth }
+    })
+  }
+
+  function changeTargetWidthDraft(value: string) {
+    setTargetSizeDraft(current => ({ ...current, targetWidth: value }))
+    const nextValue = parseDimensionDraft(value)
+    if (nextValue !== null)
+      updateTargetWidth(nextValue)
+  }
+
+  function commitTargetWidthDraft() {
+    const nextValue = parseDimensionDraft(targetSizeDraft.targetWidth, true)
+    if (nextValue !== null)
+      updateTargetWidth(nextValue)
+    else
+      setTargetSizeDraft(current => ({ ...current, targetWidth: String(targetSize.targetWidth) }))
+  }
+
+  function updateTargetHeight(value: number) {
+    const targetHeight = clampInteger(value, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
+    setTargetSize((current) => {
+      if (current.mode === 'ratio') {
+        const ratio = parseRatio(current.ratioText)
+        if (ratio) {
+          const next = normalizeRatioSizeFromHeight(targetHeight, ratio)
+          return {
+            ...current,
+            targetWidth: next.width,
+            targetHeight: next.height,
+          }
+        }
+        return {
+          ...current,
+          targetHeight,
+          targetWidth: current.targetWidth,
+        }
+      }
+      return { ...current, targetHeight }
+    })
+  }
+
+  function changeTargetHeightDraft(value: string) {
+    setTargetSizeDraft(current => ({ ...current, targetHeight: value }))
+    const nextValue = parseDimensionDraft(value)
+    if (nextValue !== null)
+      updateTargetHeight(nextValue)
+  }
+
+  function commitTargetHeightDraft() {
+    const nextValue = parseDimensionDraft(targetSizeDraft.targetHeight, true)
+    if (nextValue !== null)
+      updateTargetHeight(nextValue)
+    else
+      setTargetSizeDraft(current => ({ ...current, targetHeight: String(targetSize.targetHeight) }))
+  }
+
+  function updateAutoUpscale(autoUpscale: boolean) {
+    setTargetSize(current => ({ ...current, autoUpscale }))
   }
 
   function removeRefFile(index: number) {
@@ -567,6 +734,20 @@ export default function App() {
     }
     if (!prompt.trim()) {
       setGenStatus({ type: 'err', message: '请填写 Prompt' })
+      return
+    }
+    const currentSizePlanResult = createSizePlan(targetSize)
+    if (!currentSizePlanResult.plan) {
+      setGenStatus({ type: 'err', message: currentSizePlanResult.error })
+      return
+    }
+    const currentSizePlan = currentSizePlanResult.plan
+    if (targetSize.autoUpscale && currentSizePlan.needsUpscale && !isUpscaleProviderConfigured(currentUpscaleProvider)) {
+      setGenStatus({ type: 'err', message: '自动超分需要先配置超分服务' })
+      return
+    }
+    if (targetSize.autoUpscale && currentSizePlan.needsUpscale && !currentSizePlan.canAutoUpscale) {
+      setGenStatus({ type: 'err', message: '目标尺寸超过 4X 自动超分能力，请降低目标尺寸' })
       return
     }
 
@@ -592,6 +773,7 @@ export default function App() {
     setImageSizes({})
     setSelectedUpscaleFactors({})
     setResultUpscaleVariants({})
+    setAutoUpscalingIndexes({})
     setUpscaleResponseJson('无')
     setCopiedIndex(null)
     setDownloadedIndex(null)
@@ -609,7 +791,7 @@ export default function App() {
           prompt: prompt.trim(),
           model: currentModel.id,
           n: Math.min(params.n || 1, currentModel.maxGenerations),
-          size: params.size,
+          size: currentSizePlan.requestSize,
           quality: params.quality,
           autoPrompt: params.autoPrompt === 'true',
           translate: params.translate === 'true',
@@ -637,14 +819,14 @@ export default function App() {
         formData.append('prompt', prompt.trim())
         formData.append('model', currentModel.id)
         formData.append('n', String(Math.min(params.n || 1, currentModel.maxGenerations)))
-        formData.append('size', params.size)
+        formData.append('size', currentSizePlan.requestSize)
         formData.append('quality', params.quality)
         formData.append('autoPrompt', params.autoPrompt)
         formData.append('translate', params.translate)
         if (currentModel.hasResolution && params.resolution)
           formData.append('resolution', params.resolution)
 
-        nextRequestJson = `[multipart] prompt=${prompt.trim()} model=${currentModel.id} refImages=${useRefFiles.length} size=${params.size}`
+        nextRequestJson = `[multipart] prompt=${prompt.trim()} model=${currentModel.id} refImages=${useRefFiles.length} size=${currentSizePlan.requestSize}`
         setRequestJson(nextRequestJson)
         setGenStatus({ type: 'loading', message: `图生图中（上传 ${useRefFiles.length} 张参考图，约 15-30s）...` })
         response = await fetch(`${baseUrl}/v1/images/edits`, {
@@ -679,6 +861,7 @@ export default function App() {
         setActiveHistoryRecordId(null)
         setSelectedUpscaleFactors({})
         setResultUpscaleVariants({})
+        setAutoUpscalingIndexes({})
         return
       }
 
@@ -688,7 +871,9 @@ export default function App() {
       setResultUpscaleVariants({})
       setGenStatus({ type: 'ok', message: `成功生成 ${nextResults.length} 张，用时 ${duration}s` })
       showToast(`生成成功：${nextResults.length} 张图片`, 'success')
-      await saveHistory(nextResults, duration, nextRequestJson)
+      const recordId = await saveHistory(nextResults, duration, nextRequestJson, currentSizePlan)
+      if (targetSize.autoUpscale && currentSizePlan.needsUpscale && currentSizePlan.canAutoUpscale)
+        void runAutoUpscaleQueue(nextResults, currentSizePlan, recordId)
     }
     catch (error) {
       if (timerRef.current) {
@@ -700,6 +885,7 @@ export default function App() {
       setActiveHistoryRecordId(null)
       setSelectedUpscaleFactors({})
       setResultUpscaleVariants({})
+      setAutoUpscalingIndexes({})
       if ((error as Error).name === 'AbortError') {
         setGenStatus({ type: 'warn', message: '已取消生成' })
       }
@@ -715,9 +901,9 @@ export default function App() {
     }
   }
 
-  async function saveHistory(nextResults: ResultImage[], duration: string, nextRequestJson: string) {
+  async function saveHistory(nextResults: ResultImage[], duration: string, nextRequestJson: string, plan: SizePlan) {
     if (!currentProvider || !currentModel || !nextResults.length)
-      return
+      return null
 
     const imageBlobs: Blob[] = []
     let totalSize = 0
@@ -730,15 +916,23 @@ export default function App() {
     }
 
     if (!imageBlobs.length)
-      return
+      return null
 
     const nextParams: RequestParams = {
       n: params.n,
-      size: params.size,
+      size: plan.requestSize,
       quality: params.quality,
       autoPrompt: params.autoPrompt,
       translate: params.translate,
       resolution: currentModel.hasResolution ? params.resolution : undefined,
+      targetSizeMode: targetSize.mode,
+      targetRatio: targetSize.mode === 'ratio' ? targetSize.ratioText : undefined,
+      targetWidth: plan.targetWidth,
+      targetHeight: plan.targetHeight,
+      generationWidth: plan.generationWidth,
+      generationHeight: plan.generationHeight,
+      autoUpscale: targetSize.autoUpscale,
+      autoUpscaleFactor: plan.autoUpscaleFactor || undefined,
     }
 
     const recordId = await addRecord({
@@ -760,6 +954,7 @@ export default function App() {
 
     await enforceStorageLimit()
     await refreshHistory()
+    return recordId || null
   }
 
   function getCurrentImageBase64(index: number) {
@@ -802,8 +997,8 @@ export default function App() {
     }
   }
 
-  async function handleUpscale(index: number) {
-    const image = results[index]
+  async function handleUpscale(index: number, options: UpscaleOptions = {}) {
+    const image = options.sourceImage || results[index]
     if (!image?.b64_json) {
       showToast('该图片无 base64 数据，无法放大', 'error')
       return
@@ -812,7 +1007,9 @@ export default function App() {
       showToast('请先配置放大服务', 'error')
       return
     }
-    const selectedFactor = selectedUpscaleFactors[index] || 1
+    const selectedFactor = options.factor || selectedUpscaleFactors[index] || 1
+    if (options.factor)
+      setSelectedUpscaleFactors(current => ({ ...current, [index]: options.factor as UpscaleFactor }))
     const existingVariant = resultUpscaleVariants[index]?.[selectedFactor]
     if (selectedFactor === 1) {
       showToast('1X 为原图，不需要提升分辨率', 'error')
@@ -823,19 +1020,23 @@ export default function App() {
       return
     }
 
+    if (options.auto)
+      setAutoUpscalingIndexes(current => ({ ...current, [index]: true }))
     const dims = currentUpscaleConfig.provider === 'aliyun'
       ? await validateAliyunUpscaleInput(image.b64_json)
       : await readBase64ImageSize(image.b64_json).catch(() => parseImageSize(imageSizes[index]))
     if (!dims) {
       showToast('图片尺寸尚未就绪，请稍候再试', 'error')
+      if (options.auto)
+        setAutoUpscalingIndexes(current => ({ ...current, [index]: false }))
       return
     }
 
-    const targetWidth = Math.round(dims.width * selectedFactor)
-    const targetHeight = Math.round(dims.height * selectedFactor)
+    const targetWidth = options.targetWidth || Math.round(dims.width * selectedFactor)
+    const targetHeight = options.targetHeight || Math.round(dims.height * selectedFactor)
 
     setUpscalingIndex(index)
-    setUpscaleResponseJson('处理中...')
+    setUpscaleResponseJson(options.auto ? '自动超分处理中...' : '处理中...')
     try {
       const out = await upscaleImage(currentUpscaleConfig, image.b64_json, targetWidth, targetHeight)
       setResultUpscaleVariants(current => ({
@@ -850,11 +1051,12 @@ export default function App() {
         width: out.width,
         height: out.height,
       }, null, 2))
-      if (activeHistoryRecordId !== null)
-        await saveHistoryUpscaleVariant(activeHistoryRecordId, index, selectedFactor, out.imageBase64, out.localPath)
+      const targetRecordId = options.recordId ?? activeHistoryRecordId
+      if (targetRecordId !== null)
+        await saveHistoryUpscaleVariant(targetRecordId, index, selectedFactor, out.imageBase64, out.localPath)
       await enforceStorageLimit()
       await refreshHistory()
-      showToast(`已放大至 ${out.width} × ${out.height}`, 'success')
+      showToast(`${options.auto ? '已自动超分至' : '已放大至'} ${out.width} × ${out.height}`, 'success')
     }
     catch (error) {
       const message = getErrorMessage(error)
@@ -863,6 +1065,26 @@ export default function App() {
     }
     finally {
       setUpscalingIndex(null)
+      if (options.auto)
+        setAutoUpscalingIndexes(current => ({ ...current, [index]: false }))
+    }
+  }
+
+  async function runAutoUpscaleQueue(nextResults: ResultImage[], plan: SizePlan, recordId: number | null) {
+    if (!plan.autoUpscaleFactor)
+      return
+
+    for (const [index, image] of nextResults.entries()) {
+      if (!image.b64_json)
+        continue
+      await handleUpscale(index, {
+        factor: plan.autoUpscaleFactor,
+        targetWidth: plan.targetWidth,
+        targetHeight: plan.targetHeight,
+        sourceImage: image,
+        recordId,
+        auto: true,
+      })
     }
   }
 
@@ -885,6 +1107,7 @@ export default function App() {
       translate: String(record.params.translate ?? 'false'),
       resolution: record.params.resolution,
     })
+    setTargetSize(makeTargetSizeFromParams(record.params))
     setRequestJson(record.requestJson || '无')
     setUpscaleResponseJson('无')
 
@@ -906,6 +1129,7 @@ export default function App() {
     setImageSizes({})
     setSelectedUpscaleFactors({})
     setResultUpscaleVariants(restoredVariants)
+    setAutoUpscalingIndexes({})
     setActiveHistoryRecordId(record.id || null)
     setCopiedIndex(null)
     setDownloadedIndex(null)
@@ -1127,14 +1351,6 @@ export default function App() {
                 />
               </div>
               <div>
-                <label htmlFor="sizeSelect">尺寸 <span className="muted">{currentModel?.sizeFormat ? `(${currentModel.sizeFormat})` : ''}</span></label>
-                <select id="sizeSelect" value={params.size} onChange={event => setParams(current => ({ ...current, size: event.target.value }))}>
-                  {filteredSizeOptions.length
-                    ? filteredSizeOptions.map(size => <option key={size} value={size}>{size}</option>)
-                    : <option value="">默认</option>}
-                </select>
-              </div>
-              <div>
                 <label htmlFor="quality">质量</label>
                 <select id="quality" value={params.quality} onChange={event => setParams(current => ({ ...current, quality: event.target.value }))}>
                   <option value="auto">auto</option>
@@ -1169,33 +1385,139 @@ export default function App() {
                 : null}
             </div>
 
-            {sizeOptions.length > 0
-              ? (
-                  <div className="size-grid-wrap">
-                    <label>尺寸筛选</label>
-                    <div className="size-filter-bar">
-                      <button type="button" className={`chip ${sizeFilter === 'all' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('all')}>全部</button>
-                      <button type="button" className={`chip ${sizeFilter === 'square' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('square')}>方图</button>
-                      <button type="button" className={`chip ${sizeFilter === 'landscape' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('landscape')}>横图</button>
-                      <button type="button" className={`chip ${sizeFilter === 'portrait' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('portrait')}>竖图</button>
-                      <button type="button" className={`chip ${sizeFilter === 'ultrawide' ? 'active' : ''}`} onClick={() => handleSizeFilterChange('ultrawide')}>超宽</button>
+            <div className="target-size-panel">
+              <div className="target-size-head">
+                <label>目标尺寸</label>
+                <div className="target-size-mode">
+                  <button type="button" className={`chip ${targetSize.mode === 'ratio' ? 'active' : ''}`} onClick={() => updateTargetSizeMode('ratio')}>按比例</button>
+                  <button type="button" className={`chip ${targetSize.mode === 'manual' ? 'active' : ''}`} onClick={() => updateTargetSizeMode('manual')}>直接输入</button>
+                </div>
+              </div>
+
+              {targetSize.mode === 'ratio'
+                ? (
+                    <>
+                      <div className="ratio-chip-grid">
+                        {COMMON_RATIOS.map(ratio => (
+                          <button key={ratio} type="button" className={`chip ${targetSize.ratioText === ratio ? 'active' : ''}`} onClick={() => updateRatioText(ratio)}>
+                            {ratio}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="target-input-grid compact">
+                        <div>
+                          <label htmlFor="ratioText">自定义比例</label>
+                          <input id="ratioText" value={targetSize.ratioText} placeholder="16:9" onChange={event => updateRatioText(event.target.value)} />
+                        </div>
+                        <div>
+                          <label htmlFor="targetWidthRange">目标宽度</label>
+                          <input
+                            id="targetWidthRange"
+                            type="range"
+                            min={TARGET_WIDTH_MIN}
+                            max={TARGET_WIDTH_MAX}
+                            step={SIZE_ALIGN}
+                            value={Math.min(targetSize.targetWidth, TARGET_WIDTH_MAX)}
+                            onChange={event => updateTargetWidth(Number(event.target.value))}
+                          />
+                        </div>
+                      </div>
+                      <div className="dimension-preset-grid">
+                        <div>
+                          <label>常用宽度</label>
+                          <div className="dimension-preset-row">
+                            {COMMON_TARGET_WIDTHS.map(width => (
+                              <button key={width} type="button" className={`chip ${targetSize.targetWidth === width ? 'active' : ''}`} onClick={() => updateTargetWidth(width)}>
+                                {width}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <label>常用高度</label>
+                          <div className="dimension-preset-row">
+                            {COMMON_TARGET_HEIGHTS.map(height => (
+                              <button key={height} type="button" className={`chip ${targetSize.targetHeight === height ? 'active' : ''}`} onClick={() => updateTargetHeight(height)}>
+                                {height}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )
+                : null}
+
+              <div className="target-input-grid">
+                <div>
+                  <label htmlFor="targetWidth">目标宽度</label>
+                  <input
+                    id="targetWidth"
+                    inputMode="numeric"
+                    value={targetSizeDraft.targetWidth}
+                    onBlur={commitTargetWidthDraft}
+                    onChange={event => changeTargetWidthDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter')
+                        event.currentTarget.blur()
+                    }}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="targetHeight">目标高度</label>
+                  <input
+                    id="targetHeight"
+                    inputMode="numeric"
+                    value={targetSizeDraft.targetHeight}
+                    onBlur={commitTargetHeightDraft}
+                    onChange={event => changeTargetHeightDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter')
+                        event.currentTarget.blur()
+                    }}
+                  />
+                </div>
+              </div>
+
+              <label className="auto-upscale-toggle">
+                <input type="checkbox" checked={targetSize.autoUpscale} onChange={event => updateAutoUpscale(event.target.checked)} />
+                <span>自动超分</span>
+              </label>
+
+              {sizePlan
+                ? (
+                    <div className={`size-plan-preview ${sizePlan.needsUpscale ? 'warn' : 'ready'}`}>
+                      <div>
+                        <span>目标尺寸</span>
+                        <strong>{sizePlan.targetWidth} × {sizePlan.targetHeight}</strong>
+                      </div>
+                      <div>
+                        <span>生图尺寸</span>
+                        <strong>{sizePlan.generationWidth} × {sizePlan.generationHeight}</strong>
+                      </div>
+                      <div>
+                        <span>后续处理</span>
+                        <strong>
+                          {sizePlan.needsUpscale
+                            ? targetSize.autoUpscale
+                              ? sizePlan.canAutoUpscale
+                                ? `自动超分 ${sizePlan.autoUpscaleFactor}X`
+                                : '超过 4X 能力'
+                              : '未启用自动超分'
+                            : '直接生成'}
+                        </strong>
+                      </div>
                     </div>
-                    <label>尺寸快选</label>
-                    <div className="size-grid">
-                      {filteredSizeOptions.map(size => (
-                        <label key={size}>
-                          <input type="radio" checked={params.size === size} onChange={() => setParams(current => ({ ...current, size }))} />
-                          <span>{size}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )
-              : null}
+                  )
+                : (
+                    <div className="target-size-error">{sizePlanResult.error}</div>
+                  )}
+            </div>
 
             <div className="composer-checklist">
               <span className={`composer-check-item ${currentProvider ? 'ready' : ''}`}>供应商</span>
               <span className={`composer-check-item ${currentModel ? 'ready' : ''}`}>模型</span>
+              <span className={`composer-check-item ${sizePlan ? 'ready' : ''}`}>尺寸</span>
               <span className={`composer-check-item ${prompt.trim() ? 'ready' : ''}`}>Prompt</span>
               <span className={`composer-check-item ${mode === 'gen' || refFiles.length ? 'ready' : ''}`}>参考图</span>
             </div>
@@ -1270,6 +1592,7 @@ export default function App() {
                       const selectedBase64 = selectedFactor === 1 ? image.b64_json : selectedVariant
                       const source = selectedBase64 ? `data:image/png;base64,${selectedBase64}` : image.b64_json ? `data:image/png;base64,${image.b64_json}` : image.url || ''
                       const isUpscaleConfigured = isUpscaleProviderConfigured(currentUpscaleProvider)
+                      const isAutoUpscaling = !!autoUpscalingIndexes[index]
                       const hasSelectedVariant = selectedFactor > 1 && !!selectedVariant
                       const upscaleDisabled = !isUpscaleConfigured || upscalingIndex !== null || selectedFactor === 1 || hasSelectedVariant
                       const upscaleTitle = !isUpscaleConfigured
@@ -1328,6 +1651,7 @@ export default function App() {
                                           key={factor}
                                           type="button"
                                           className={`chip ${selectedFactor === factor ? 'active' : ''}`}
+                                          disabled={upscalingIndex === index}
                                           onClick={() => setSelectedUpscaleFactors(current => ({ ...current, [index]: factor }))}
                                         >
                                           {factor}X
@@ -1341,7 +1665,7 @@ export default function App() {
                                       title={upscaleTitle}
                                       onClick={() => void handleUpscale(index)}
                                     >
-                                      {upscalingIndex === index ? '放大中…' : '提升分辨率'}
+                                      {upscalingIndex === index ? (isAutoUpscaling ? '自动超分中…' : '放大中…') : '提升分辨率'}
                                     </button>
                                   </div>
                                 )
@@ -1864,6 +2188,198 @@ export default function App() {
   )
 }
 
+function clampInteger(value: number, min: number, max: number) {
+  if (!Number.isFinite(value))
+    return min
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function parseDimensionDraft(value: string, shouldClamp = false) {
+  const text = value.trim()
+  if (!/^\d+$/.test(text))
+    return null
+  const numericValue = Number(text)
+  if (!Number.isFinite(numericValue))
+    return null
+  if (shouldClamp)
+    return clampInteger(numericValue, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
+  if (numericValue < TARGET_SIZE_MIN || numericValue > TARGET_SIZE_MAX)
+    return null
+  return Math.round(numericValue)
+}
+
+function alignDown(value: number, step: number) {
+  return Math.max(step, Math.floor(value / step) * step)
+}
+
+function parseRatio(text: string) {
+  const match = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(text.trim())
+  if (!match)
+    return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0)
+    return null
+  return { width, height }
+}
+
+function getHeightByRatio(width: number, ratio: { width: number; height: number }) {
+  return clampInteger((width * ratio.height) / ratio.width, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
+}
+
+function getWidthByRatio(height: number, ratio: { width: number; height: number }) {
+  return clampInteger((height * ratio.width) / ratio.height, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
+}
+
+function normalizeRatioSizeFromWidth(width: number, ratio: { width: number; height: number }) {
+  const rawHeight = (width * ratio.height) / ratio.width
+  if (rawHeight > TARGET_SIZE_MAX) {
+    const height = TARGET_SIZE_MAX
+    return { width: getWidthByRatio(height, ratio), height }
+  }
+  if (rawHeight < TARGET_SIZE_MIN) {
+    const height = TARGET_SIZE_MIN
+    return { width: getWidthByRatio(height, ratio), height }
+  }
+  return { width, height: Math.round(rawHeight) }
+}
+
+function normalizeRatioSizeFromHeight(height: number, ratio: { width: number; height: number }) {
+  const rawWidth = (height * ratio.width) / ratio.height
+  if (rawWidth > TARGET_SIZE_MAX) {
+    const width = TARGET_SIZE_MAX
+    return { width, height: getHeightByRatio(width, ratio) }
+  }
+  if (rawWidth < TARGET_SIZE_MIN) {
+    const width = TARGET_SIZE_MIN
+    return { width, height: getHeightByRatio(width, ratio) }
+  }
+  return { width: Math.round(rawWidth), height }
+}
+
+function getGreatestCommonDivisor(left: number, right: number): number {
+  const normalizedLeft = Math.abs(Math.round(left))
+  const normalizedRight = Math.abs(Math.round(right))
+  if (!normalizedRight)
+    return normalizedLeft || 1
+  return getGreatestCommonDivisor(normalizedRight, normalizedLeft % normalizedRight)
+}
+
+function formatRatioFromSize(width: number, height: number) {
+  const divisor = getGreatestCommonDivisor(width, height)
+  return `${Math.round(width / divisor)}:${Math.round(height / divisor)}`
+}
+
+function chooseUpscaleFactor(requiredScale: number): UpscaleFactor | null {
+  if (requiredScale <= 1)
+    return 1
+  if (requiredScale <= 2)
+    return 2
+  if (requiredScale <= 3)
+    return 3
+  if (requiredScale <= 4)
+    return 4
+  return null
+}
+
+function createSizePlan(size: TargetSizeState): SizePlanResult {
+  const targetWidth = clampInteger(size.targetWidth, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
+  let targetHeight = clampInteger(size.targetHeight, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
+
+  if (size.mode === 'ratio') {
+    const ratio = parseRatio(size.ratioText)
+    if (!ratio)
+      return { plan: null, error: '请输入有效比例，例如 16:9' }
+    targetHeight = getHeightByRatio(targetWidth, ratio)
+  }
+
+  const targetArea = targetWidth * targetHeight
+  if (targetArea <= GENERATION_MAX_AREA) {
+    return {
+      plan: {
+        targetWidth,
+        targetHeight,
+        generationWidth: targetWidth,
+        generationHeight: targetHeight,
+        requestSize: `${targetWidth}x${targetHeight}`,
+        needsUpscale: false,
+        autoUpscaleFactor: null,
+        canAutoUpscale: true,
+        requiredScale: 1,
+      },
+      error: null,
+    }
+  }
+
+  const scale = Math.sqrt(GENERATION_MAX_AREA / targetArea)
+  let generationWidth = Math.max(TARGET_SIZE_MIN, alignDown(targetWidth * scale, SIZE_ALIGN))
+  let generationHeight = Math.max(TARGET_SIZE_MIN, alignDown(targetHeight * scale, SIZE_ALIGN))
+  while (generationWidth * generationHeight > GENERATION_MAX_AREA) {
+    if (generationWidth >= generationHeight)
+      generationWidth = Math.max(TARGET_SIZE_MIN, generationWidth - SIZE_ALIGN)
+    else
+      generationHeight = Math.max(TARGET_SIZE_MIN, generationHeight - SIZE_ALIGN)
+  }
+
+  const requiredScale = Math.max(targetWidth / generationWidth, targetHeight / generationHeight)
+  const factor = chooseUpscaleFactor(requiredScale)
+
+  return {
+    plan: {
+      targetWidth,
+      targetHeight,
+      generationWidth,
+      generationHeight,
+      requestSize: `${generationWidth}x${generationHeight}`,
+      needsUpscale: true,
+      autoUpscaleFactor: factor && factor > 1 ? factor : null,
+      canAutoUpscale: factor !== null,
+      requiredScale,
+    },
+    error: null,
+  }
+}
+
+function makeTargetSizeFromPreset(size: string): TargetSizeState {
+  const parsedSize = parseSize(size)
+  if (parsedSize) {
+    return {
+      mode: 'manual',
+      ratioText: formatRatioFromSize(parsedSize.width, parsedSize.height),
+      targetWidth: parsedSize.width,
+      targetHeight: parsedSize.height,
+      autoUpscale: false,
+    }
+  }
+
+  const ratio = parseRatio(size)
+  if (ratio) {
+    return {
+      mode: 'ratio',
+      ratioText: size,
+      targetWidth: 1024,
+      targetHeight: getHeightByRatio(1024, ratio),
+      autoUpscale: false,
+    }
+  }
+
+  return defaultTargetSize
+}
+
+function makeTargetSizeFromParams(params: RequestParams): TargetSizeState {
+  if (params.targetWidth && params.targetHeight) {
+    return {
+      mode: params.targetSizeMode === 'manual' ? 'manual' : 'ratio',
+      ratioText: params.targetRatio || formatRatioFromSize(params.targetWidth, params.targetHeight),
+      targetWidth: params.targetWidth,
+      targetHeight: params.targetHeight,
+      autoUpscale: !!params.autoUpscale,
+    }
+  }
+
+  return makeTargetSizeFromPreset(params.size || '')
+}
+
 // imageSizes 存的是 "1024 × 768px" 格式，与 parseSize 解析的 "1024x768" 不同
 function parseImageSize(text: string | undefined) {
   const match = /^(\d+)\s*×\s*(\d+)/.exec(text || '')
@@ -1994,22 +2510,4 @@ function getSortedSizes(sizes: string[]) {
       return leftParsed.width - rightParsed.width
     return leftParsed.height - rightParsed.height
   })
-}
-
-function matchSizeFilter(size: string, filter: SizeFilter) {
-  const parsed = parseSize(size)
-  if (!parsed)
-    return filter === 'all'
-
-  if (filter === 'all')
-    return true
-  if (filter === 'square')
-    return Math.abs(parsed.ratio - 1) < 0.02
-  if (filter === 'ultrawide')
-    return parsed.ratio >= 1.85
-  if (filter === 'landscape')
-    return parsed.ratio > 1.02 && parsed.ratio < 1.85
-  if (filter === 'portrait')
-    return parsed.ratio < 0.98
-  return true
 }
