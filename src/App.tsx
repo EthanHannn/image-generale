@@ -42,6 +42,7 @@ type ResultImage = { b64_json?: string; url?: string }
 type ResultPayload = { data?: ResultImage[]; error?: { message?: string } | string }
 type ViewName = 'workspace' | 'history' | 'settings'
 type UpscaleFactor = 1 | 2 | 3 | 4
+type ImageDimensions = { width: number; height: number }
 type TargetSizeMode = 'ratio' | 'manual'
 type TargetSizeState = {
   mode: TargetSizeMode
@@ -162,6 +163,7 @@ export default function App() {
   const [loadingCount, setLoadingCount] = useState(0)
   const [isGenerating, setIsGenerating] = useState(false)
   const [imageSizes, setImageSizes] = useState<Record<number, string>>({})
+  const [originalImageSizes, setOriginalImageSizes] = useState<Record<number, ImageDimensions>>({})
   const [downloadedIndex, setDownloadedIndex] = useState<number | null>(null)
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [previewImage, setPreviewImage] = useState('')
@@ -771,6 +773,7 @@ export default function App() {
     setResults([])
     setActiveHistoryRecordId(null)
     setImageSizes({})
+    setOriginalImageSizes({})
     setSelectedUpscaleFactors({})
     setResultUpscaleVariants({})
     setAutoUpscalingIndexes({})
@@ -859,6 +862,7 @@ export default function App() {
         showToast(`请求失败: ${message}`, 'error')
         setResults([])
         setActiveHistoryRecordId(null)
+        setOriginalImageSizes({})
         setSelectedUpscaleFactors({})
         setResultUpscaleVariants({})
         setAutoUpscalingIndexes({})
@@ -883,6 +887,7 @@ export default function App() {
       setLoadingCount(0)
       setResults([])
       setActiveHistoryRecordId(null)
+      setOriginalImageSizes({})
       setSelectedUpscaleFactors({})
       setResultUpscaleVariants({})
       setAutoUpscalingIndexes({})
@@ -1112,7 +1117,7 @@ export default function App() {
     setUpscaleResponseJson('无')
 
     if (models.some(model => model.id === record.modelId))
-      selectModel(record.modelId)
+      setCurrentModelId(record.modelId)
 
     const restored: ResultImage[] = []
     for (const blob of record.images || [])
@@ -1127,6 +1132,7 @@ export default function App() {
       }
     }
     setImageSizes({})
+    setOriginalImageSizes({})
     setSelectedUpscaleFactors({})
     setResultUpscaleVariants(restoredVariants)
     setAutoUpscalingIndexes({})
@@ -1594,6 +1600,9 @@ export default function App() {
                       const isUpscaleConfigured = isUpscaleProviderConfigured(currentUpscaleProvider)
                       const isAutoUpscaling = !!autoUpscalingIndexes[index]
                       const hasSelectedVariant = selectedFactor > 1 && !!selectedVariant
+                      const originalDims = originalImageSizes[index] || parseImageSize(imageSizes[index])
+                      const upscalePreviewText = getUpscalePreviewText(originalDims, selectedFactor, hasSelectedVariant)
+                      const imageAspectRatio = originalDims ? `${originalDims.width} / ${originalDims.height}` : undefined
                       const upscaleDisabled = !isUpscaleConfigured || upscalingIndex !== null || selectedFactor === 1 || hasSelectedVariant
                       const upscaleTitle = !isUpscaleConfigured
                         ? '请先在设置页配置放大服务'
@@ -1603,7 +1612,7 @@ export default function App() {
                             ? `当前图片已存在 ${selectedFactor}X 版本`
                             : ''
                       return (
-                        <div key={`${source}_${index}`} className="result-item">
+                        <div key={index} className="result-item">
                           <div className="info">
                             <span className="info-left">
                               <span className="info-tag">#{index + 1}</span>
@@ -1614,7 +1623,7 @@ export default function App() {
                           </div>
                           {source
                             ? (
-                                <div className="result-img-wrap">
+                                <div className="result-img-wrap" style={imageAspectRatio ? { aspectRatio: imageAspectRatio } : undefined}>
                                   <img
                                     className="result-img"
                                     src={source}
@@ -1623,7 +1632,10 @@ export default function App() {
                                     onClick={() => setPreviewImage(source)}
                                     onLoad={(event) => {
                                       const target = event.currentTarget
-                                      setImageSizes(current => ({ ...current, [index]: `${target.naturalWidth} × ${target.naturalHeight}px` }))
+                                      const dimensions = { width: target.naturalWidth, height: target.naturalHeight }
+                                      setImageSizes(current => ({ ...current, [index]: formatImageDimensions(dimensions) }))
+                                      if ((selectedFactor === 1 || !selectedVariant) && image.b64_json)
+                                        setOriginalImageSizes(current => ({ ...current, [index]: dimensions }))
                                     }}
                                   />
                                 </div>
@@ -1658,6 +1670,7 @@ export default function App() {
                                         </button>
                                       ))}
                                     </div>
+                                    <div className="result-upscale-target">{upscalePreviewText}</div>
                                     <button
                                       className="dl-btn result-upscale-btn"
                                       type="button"
@@ -2378,6 +2391,24 @@ function makeTargetSizeFromParams(params: RequestParams): TargetSizeState {
   }
 
   return makeTargetSizeFromPreset(params.size || '')
+}
+
+function formatImageDimensions(dimensions: ImageDimensions) {
+  return `${dimensions.width} × ${dimensions.height}px`
+}
+
+function getUpscalePreviewText(dimensions: ImageDimensions | null, factor: UpscaleFactor, hasVariant: boolean) {
+  if (!dimensions)
+    return factor > 1 ? '预计输出：等待原图尺寸' : '原图尺寸：计算中'
+
+  if (factor === 1)
+    return `原图尺寸：${formatImageDimensions(dimensions)}`
+
+  const target = {
+    width: Math.round(dimensions.width * factor),
+    height: Math.round(dimensions.height * factor),
+  }
+  return `${hasVariant ? '已生成' : '预计输出'}：${formatImageDimensions(target)}`
 }
 
 // imageSizes 存的是 "1024 × 768px" 格式，与 parseSize 解析的 "1024x768" 不同
