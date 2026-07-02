@@ -7,13 +7,19 @@ type HistoryViewProps = {
   historyRecords: HistoryRecord[]
   historySearch: string
   historyModelFilter: string
+  historyFavoriteFilter: 'all' | 'favorites'
+  historyModeFilter: 'all' | 'gen' | 'edit' | 'upscale'
   storageUsed: number
   maxStorage: number
   onHistorySearchChange: (value: string) => void
   onHistoryModelFilterChange: (value: string) => void
+  onHistoryFavoriteFilterChange: (value: 'all' | 'favorites') => void
+  onHistoryModeFilterChange: (value: 'all' | 'gen' | 'edit' | 'upscale') => void
   onClearHistory: () => void | Promise<void>
   onRecallHistory: (recordId: number) => void | Promise<void>
   onRemoveHistory: (recordId: number) => void | Promise<void>
+  onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
+  favoritePendingIds: Record<number, boolean>
 }
 
 export function HistoryView(props: HistoryViewProps) {
@@ -21,21 +27,30 @@ export function HistoryView(props: HistoryViewProps) {
     historyRecords,
     historySearch,
     historyModelFilter,
+    historyFavoriteFilter,
+    historyModeFilter,
     storageUsed,
     maxStorage,
     onHistorySearchChange,
     onHistoryModelFilterChange,
+    onHistoryFavoriteFilterChange,
+    onHistoryModeFilterChange,
     onClearHistory,
     onRecallHistory,
     onRemoveHistory,
+    onToggleFavorite,
+    favoritePendingIds,
   } = props
 
   const storagePercent = Math.min((storageUsed / maxStorage) * 100, 100)
   const modelFilterOptions = [...new Set(historyRecords.map(record => record.modelId))].sort()
+  const favoriteCount = historyRecords.filter(record => record.isFavorite).length
   const filteredHistory = historyRecords.filter((record) => {
     const hitPrompt = !historySearch || record.prompt.toLowerCase().includes(historySearch.toLowerCase())
     const hitModel = !historyModelFilter || record.modelId === historyModelFilter
-    return hitPrompt && hitModel
+    const hitFavorite = historyFavoriteFilter === 'all' || !!record.isFavorite
+    const hitMode = historyModeFilter === 'all' || record.mode === historyModeFilter
+    return hitPrompt && hitModel && hitFavorite && hitMode
   })
   const latestRecord = historyRecords[0]
   const totalImages = historyRecords.reduce((sum, record) => sum + record.imageCount, 0)
@@ -74,6 +89,11 @@ export function HistoryView(props: HistoryViewProps) {
             <span className="history-overview-copy history-overview-copy--clamp">{latestRecord?.prompt || '生成图片后会在这里形成可回溯资产。'}</span>
           </div>
           <div className="history-overview-card">
+            <span className="history-overview-label">收藏记录</span>
+            <strong>{favoriteCount}</strong>
+            <span className="history-overview-copy">满意结果会在收藏筛选中集中呈现，并在清理时默认保留。</span>
+          </div>
+          <div className="history-overview-card">
             <span className="history-overview-label">存储占用</span>
             <strong>{storagePercent.toFixed(1)}%</strong>
             <span className="history-overview-copy">当前使用 {formatSize(storageUsed)}，接近上限时会触发自动清理策略。</span>
@@ -82,16 +102,24 @@ export function HistoryView(props: HistoryViewProps) {
         <HistoryToolbar
           historySearch={historySearch}
           historyModelFilter={historyModelFilter}
+          historyFavoriteFilter={historyFavoriteFilter}
+          historyModeFilter={historyModeFilter}
+          favoriteCount={favoriteCount}
           modelFilterOptions={modelFilterOptions}
           onHistorySearchChange={onHistorySearchChange}
           onHistoryModelFilterChange={onHistoryModelFilterChange}
+          onHistoryFavoriteFilterChange={onHistoryFavoriteFilterChange}
+          onHistoryModeFilterChange={onHistoryModeFilterChange}
           onClearHistory={onClearHistory}
         />
         <HistoryList
           historyRecords={historyRecords}
           filteredHistory={filteredHistory}
+          historyFavoriteFilter={historyFavoriteFilter}
           onRecallHistory={onRecallHistory}
           onRemoveHistory={onRemoveHistory}
+          onToggleFavorite={onToggleFavorite}
+          favoritePendingIds={favoritePendingIds}
         />
       </section>
     </div>

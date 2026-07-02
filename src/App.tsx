@@ -1,11 +1,11 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import type { ChangeEvent, DragEvent } from 'react'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
   MAX_STORAGE,
   addRecord,
-  clearAllRecords,
   deleteRecord,
   enforceStorageLimit,
   getAllRecords,
@@ -22,6 +22,7 @@ import {
   saveAppConfig,
   saveHistoryUpscaleVariant,
   selectHistoryDirectory,
+  setRecordFavorite,
   upscaleProviderToConfig,
   THEME_KEY,
   type HistoryRecord,
@@ -40,9 +41,12 @@ type StatusValue = { type: StatusType; message: string } | null
 type ToastValue = { type: 'success' | 'error'; message: string } | null
 type ResultImage = { b64_json?: string; url?: string }
 type ResultPayload = { data?: ResultImage[]; error?: { message?: string } | string }
-type ViewName = 'workspace' | 'history' | 'settings'
+type ViewName = 'workspace' | 'upscale' | 'history' | 'settings'
 type UpscaleFactor = 1 | 2 | 3 | 4
+type StandaloneUpscaleFactor = 2 | 3 | 4
 type ImageDimensions = { width: number; height: number }
+type HistoryFavoriteFilter = 'all' | 'favorites'
+type HistoryModeFilter = 'all' | 'gen' | 'edit' | 'upscale'
 type TargetSizeMode = 'ratio' | 'manual'
 type TargetSizeState = {
   mode: TargetSizeMode
@@ -75,6 +79,22 @@ type UpscaleOptions = {
   recordId?: number | null
   auto?: boolean
 }
+type StandaloneUpscaleState = {
+  fileName: string
+  fileSize: number
+  mimeType: string
+  sourceBase64: string
+  sourceWidth: number
+  sourceHeight: number
+  factor: StandaloneUpscaleFactor
+  outputBase64: string
+  outputWidth: number
+  outputHeight: number
+  duration: string
+  responseJson: string
+  activeRecordId: number | null
+  isProcessing: boolean
+}
 
 const GENERATION_MAX_AREA = 1024 * 1024
 const TARGET_WIDTH_MIN = 256
@@ -96,6 +116,23 @@ const emptyParams: RequestParams = {
   quality: 'auto',
   autoPrompt: 'false',
   translate: 'false',
+}
+
+const defaultStandaloneUpscaleState: StandaloneUpscaleState = {
+  fileName: '',
+  fileSize: 0,
+  mimeType: '',
+  sourceBase64: '',
+  sourceWidth: 0,
+  sourceHeight: 0,
+  factor: 2,
+  outputBase64: '',
+  outputWidth: 0,
+  outputHeight: 0,
+  duration: '',
+  responseJson: '无',
+  activeRecordId: null,
+  isProcessing: false,
 }
 
 const defaultTargetSize: TargetSizeState = {
@@ -175,10 +212,14 @@ export default function App() {
   const [resultUpscaleVariants, setResultUpscaleVariants] = useState<Record<number, Partial<Record<UpscaleFactor, string>>>>({})
   const [upscalingIndex, setUpscalingIndex] = useState<number | null>(null)
   const [autoUpscalingIndexes, setAutoUpscalingIndexes] = useState<Record<number, boolean>>({})
+  const [standaloneUpscale, setStandaloneUpscale] = useState<StandaloneUpscaleState>(defaultStandaloneUpscaleState)
 
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([])
   const [historySearch, setHistorySearch] = useState('')
   const [historyModelFilter, setHistoryModelFilter] = useState('')
+  const [historyFavoriteFilter, setHistoryFavoriteFilter] = useState<HistoryFavoriteFilter>('all')
+  const [historyModeFilter, setHistoryModeFilter] = useState<HistoryModeFilter>('all')
+  const [favoritePendingIds, setFavoritePendingIds] = useState<Record<number, boolean>>({})
   const [storageUsed, setStorageUsed] = useState(0)
   const [historyRootDir, setHistoryRootDir] = useState('')
   const [historyDirPending, setHistoryDirPending] = useState(false)
@@ -197,6 +238,14 @@ export default function App() {
   const currentUpscaleProvider = upscaleProviders.find(provider => provider.id === currentUpscaleProviderId) || null
   const currentUpscaleConfig = upscaleProviderToConfig(currentUpscaleProvider)
   const currentModel = models.find(model => model.id === currentModelId) || null
+  const activeHistoryRecord = activeHistoryRecordId === null
+    ? null
+    : historyRecords.find(record => record.id === activeHistoryRecordId) || null
+  const activeFavoritePending = activeHistoryRecordId === null ? false : !!favoritePendingIds[activeHistoryRecordId]
+  const standaloneActiveRecord = standaloneUpscale.activeRecordId === null
+    ? null
+    : historyRecords.find(record => record.id === standaloneUpscale.activeRecordId) || null
+  const standaloneFavoritePending = standaloneUpscale.activeRecordId === null ? false : !!favoritePendingIds[standaloneUpscale.activeRecordId]
   const resolutionOptions = currentModel?.supportedResolutions || []
   const sizePlanResult = createSizePlan(targetSize)
   const sizePlan = sizePlanResult.plan
@@ -954,6 +1003,8 @@ export default function App() {
       duration,
       requestJson: nextRequestJson,
       totalSize: totalSize + JSON.stringify(nextParams).length + prompt.trim().length,
+      isFavorite: false,
+      favoritedAt: null,
     })
     setActiveHistoryRecordId(recordId || null)
 
@@ -1093,10 +1144,220 @@ export default function App() {
     }
   }
 
+  async function handleStandaloneUpscaleFile(file: File) {
+    if (!file.type.startsWith('image/')) {
+      showToast('请选择图片文件', 'error')
+      return
+    }
+    if (standaloneUpscale.isProcessing) {
+      showToast('超分处理中，暂不能替换图片', 'error')
+      return
+    }
+
+    try {
+      const sourceBase64 = await blobToBase64(file)
+      const dimensions = await readImageFileSize(file)
+      setStandaloneUpscale({
+        ...defaultStandaloneUpscaleState,
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || 'image/png',
+        sourceBase64,
+        sourceWidth: dimensions.width,
+        sourceHeight: dimensions.height,
+        factor: standaloneUpscale.factor,
+      })
+      showToast('图片已载入', 'success')
+    }
+    catch (error) {
+      showToast(`读取图片失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
+  function handleStandaloneFileInput(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (file)
+      void handleStandaloneUpscaleFile(file)
+  }
+
+  function handleStandaloneDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault()
+    const file = event.dataTransfer.files?.[0]
+    if (file)
+      void handleStandaloneUpscaleFile(file)
+  }
+
+  function setStandaloneFactor(factor: StandaloneUpscaleFactor) {
+    setStandaloneUpscale(current => ({
+      ...current,
+      factor,
+      outputBase64: '',
+      outputWidth: 0,
+      outputHeight: 0,
+      duration: '',
+      responseJson: '无',
+      activeRecordId: null,
+    }))
+  }
+
+  function resetStandaloneUpscale() {
+    if (standaloneUpscale.isProcessing)
+      return
+    setStandaloneUpscale(current => ({ ...defaultStandaloneUpscaleState, factor: current.factor }))
+  }
+
+  async function runStandaloneUpscale() {
+    if (!standaloneUpscale.sourceBase64) {
+      showToast('请先上传图片', 'error')
+      return
+    }
+    if (!isUpscaleProviderConfigured(currentUpscaleProvider)) {
+      showToast('请先在设置页配置放大服务', 'error')
+      return
+    }
+
+    const targetWidth = Math.round(standaloneUpscale.sourceWidth * standaloneUpscale.factor)
+    const targetHeight = Math.round(standaloneUpscale.sourceHeight * standaloneUpscale.factor)
+    const startedAt = performance.now()
+    setStandaloneUpscale(current => ({ ...current, isProcessing: true, responseJson: '独立超分处理中...' }))
+    try {
+      if (currentUpscaleConfig.provider === 'aliyun')
+        await validateAliyunUpscaleInput(standaloneUpscale.sourceBase64)
+      const out = await upscaleImage(currentUpscaleConfig, standaloneUpscale.sourceBase64, targetWidth, targetHeight)
+      const duration = `${((performance.now() - startedAt) / 1000).toFixed(1)}`
+      const responseJson = JSON.stringify(out.responseJson || {
+        width: out.width,
+        height: out.height,
+        scale: out.scale || standaloneUpscale.factor,
+      }, null, 2)
+      const nextParams: RequestParams = {
+        ...emptyParams,
+        size: `${standaloneUpscale.sourceWidth}x${standaloneUpscale.sourceHeight}`,
+        standaloneUpscale: true,
+        sourceFileName: standaloneUpscale.fileName,
+        sourceFileSize: standaloneUpscale.fileSize,
+        sourceMimeType: standaloneUpscale.mimeType,
+        sourceWidth: standaloneUpscale.sourceWidth,
+        sourceHeight: standaloneUpscale.sourceHeight,
+        upscaleProviderId: currentUpscaleProvider?.id,
+        upscaleProviderName: currentUpscaleProvider?.name,
+        upscaleFactor: standaloneUpscale.factor,
+        targetWidth,
+        targetHeight,
+        outputWidth: out.width,
+        outputHeight: out.height,
+      }
+      const outputBlob = base64ToBlob(out.imageBase64)
+      const sourceBlob = base64ToBlob(standaloneUpscale.sourceBase64)
+      const recordId = await addRecord({
+        timestamp: Date.now(),
+        providerId: currentUpscaleProvider?.id || 'upscale',
+        providerName: currentUpscaleProvider?.name || '超分服务',
+        mode: 'upscale',
+        modelId: currentUpscaleProvider?.id || 'standalone-upscale',
+        modelName: currentUpscaleProvider?.name || '独立超分',
+        prompt: standaloneUpscale.fileName || '独立超分',
+        params: nextParams,
+        images: [sourceBlob],
+        imageCount: 1,
+        duration,
+        requestJson: JSON.stringify({
+          request: {
+            mode: 'standalone-upscale',
+            provider: currentUpscaleProvider?.name || '',
+            factor: standaloneUpscale.factor,
+            targetWidth,
+            targetHeight,
+            sourceFileName: standaloneUpscale.fileName,
+          },
+          response: out.responseJson || {
+            width: out.width,
+            height: out.height,
+            scale: out.scale || standaloneUpscale.factor,
+          },
+        }, null, 2),
+        totalSize: sourceBlob.size + outputBlob.size + JSON.stringify(nextParams).length,
+        upscaledImages: {
+          0: {
+            [standaloneUpscale.factor]: outputBlob,
+          },
+        },
+        isFavorite: false,
+        favoritedAt: null,
+      })
+      if (recordId !== null)
+        await saveHistoryUpscaleVariant(recordId, 0, standaloneUpscale.factor, out.imageBase64, out.localPath)
+      await enforceStorageLimit()
+      await refreshHistory()
+      setStandaloneUpscale(current => ({
+        ...current,
+        outputBase64: out.imageBase64,
+        outputWidth: out.width,
+        outputHeight: out.height,
+        duration,
+        responseJson,
+        activeRecordId: recordId || null,
+        isProcessing: false,
+      }))
+      showToast(`已超分至 ${out.width} × ${out.height}`, 'success')
+    }
+    catch (error) {
+      setStandaloneUpscale(current => ({
+        ...current,
+        responseJson: JSON.stringify({ error: getErrorMessage(error) }, null, 2),
+        isProcessing: false,
+      }))
+      showToast(`独立超分失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
+  function downloadStandaloneOutput() {
+    if (!standaloneUpscale.outputBase64) {
+      showToast('暂无超分结果可下载', 'error')
+      return
+    }
+    const filename = `upscale_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${standaloneUpscale.factor}x_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`
+    downloadBlob(base64ToBlob(standaloneUpscale.outputBase64), filename)
+    showToast(`图片已下载：${filename}`, 'success')
+  }
+
   async function recallHistory(recordId: number) {
     const record = await getRecord(recordId)
     if (!record) {
       showToast('记录不存在', 'error')
+      return
+    }
+
+    if (record.mode === 'upscale') {
+      const sourceBlob = record.images?.[0]
+      if (!sourceBlob) {
+        showToast('记录缺少原图数据', 'error')
+        return
+      }
+      const factor = normalizeStandaloneFactor(record.params.upscaleFactor)
+      const outputBlob = record.upscaledImages?.[0]?.[factor]
+      const sourceBase64 = await blobToBase64(sourceBlob)
+      const outputBase64 = outputBlob ? await blobToBase64(outputBlob) : ''
+      setStandaloneUpscale({
+        fileName: record.params.sourceFileName || record.prompt || '历史图片',
+        fileSize: record.params.sourceFileSize || sourceBlob.size,
+        mimeType: record.params.sourceMimeType || sourceBlob.type || 'image/png',
+        sourceBase64,
+        sourceWidth: record.params.sourceWidth || 0,
+        sourceHeight: record.params.sourceHeight || 0,
+        factor,
+        outputBase64,
+        outputWidth: record.params.outputWidth || record.params.targetWidth || 0,
+        outputHeight: record.params.outputHeight || record.params.targetHeight || 0,
+        duration: record.duration || '',
+        responseJson: record.requestJson || '无',
+        activeRecordId: record.id || null,
+        isProcessing: false,
+      })
+      setActiveHistoryRecordId(null)
+      setView('upscale')
+      showToast('已回显到超分台', 'success')
       return
     }
 
@@ -1146,8 +1407,39 @@ export default function App() {
       window.setTimeout(() => showToast('图生图参考图未保存，请重新上传', 'error'), 1200)
   }
 
+  async function toggleHistoryFavorite(recordId: number, nextFavorite: boolean) {
+    const favoritedAt = nextFavorite ? Date.now() : null
+    const previousRecords = historyRecords
+    setFavoritePendingIds(current => ({ ...current, [recordId]: true }))
+    setHistoryRecords(current => current.map(record => record.id === recordId
+      ? { ...record, isFavorite: nextFavorite, favoritedAt }
+      : record))
+
+    try {
+      await setRecordFavorite(recordId, nextFavorite)
+      showToast(nextFavorite ? '已收藏该记录' : '已取消收藏', 'success')
+    }
+    catch (error) {
+      setHistoryRecords(previousRecords)
+      showToast(`更新收藏失败: ${getErrorMessage(error)}`, 'error')
+    }
+    finally {
+      setFavoritePendingIds((current) => {
+        const next = { ...current }
+        delete next[recordId]
+        return next
+      })
+    }
+  }
+
   async function removeHistory(recordId: number) {
+    const record = historyRecords.find(item => item.id === recordId)
+    if (record?.isFavorite && !window.confirm('该记录已收藏，确定仍要删除吗？此操作不可撤销。'))
+      return
+
     await deleteRecord(recordId)
+    if (activeHistoryRecordId === recordId)
+      setActiveHistoryRecordId(null)
     await refreshHistory()
     showToast('已删除该记录', 'success')
   }
@@ -1157,11 +1449,22 @@ export default function App() {
       showToast('没有可清空的记录', 'error')
       return
     }
-    if (!window.confirm(`确定要清空全部 ${historyRecords.length} 条历史记录吗？此操作不可撤销。`))
+    const recordsToRemove = historyRecords.filter(record => !record.isFavorite)
+    const protectedCount = historyRecords.length - recordsToRemove.length
+    if (!recordsToRemove.length) {
+      showToast('没有可清理的未收藏记录', 'error')
       return
-    await clearAllRecords()
+    }
+    const confirmText = protectedCount
+      ? `确定要清理 ${recordsToRemove.length} 条未收藏记录吗？${protectedCount} 条收藏记录会保留。`
+      : `确定要清理全部 ${recordsToRemove.length} 条历史记录吗？此操作不可撤销。`
+    if (!window.confirm(confirmText))
+      return
+    await Promise.all(recordsToRemove.map(record => record.id === undefined ? Promise.resolve() : deleteRecord(record.id)))
+    if (activeHistoryRecordId !== null && recordsToRemove.some(record => record.id === activeHistoryRecordId))
+      setActiveHistoryRecordId(null)
     await refreshHistory()
-    showToast('已清空全部历史记录', 'success')
+    showToast(protectedCount ? '已清理未收藏记录，收藏记录已保留' : '已清理历史记录', 'success')
   }
 
   async function handleSelectHistoryDirectory() {
@@ -1204,12 +1507,15 @@ export default function App() {
 
   const navItems: Array<{ id: ViewName; label: string; icon: string; hint: string }> = [
     { id: 'workspace', label: '工作台', icon: '◈', hint: '生成与结果' },
+    { id: 'upscale', label: '超分', icon: '◇', hint: '独立放大' },
     { id: 'history', label: '历史记录', icon: '◎', hint: '资产浏览' },
     { id: 'settings', label: '设置', icon: '◌', hint: '系统与配置' },
   ]
-  const viewTitle = view === 'workspace' ? '工作台' : view === 'history' ? '历史记录' : '设置'
+  const viewTitle = view === 'workspace' ? '工作台' : view === 'upscale' ? '超分' : view === 'history' ? '历史记录' : '设置'
   const viewDesc = view === 'workspace'
     ? '围绕当前供应商与模型完成图片生成和结果处理。'
+    : view === 'upscale'
+      ? '上传本地图片，单独执行高清放大并保存到历史记录。'
     : view === 'history'
       ? '查看、筛选并回显本地历史生成记录。'
       : '集中管理供应商、放大服务、历史目录与外观主题。'
@@ -1569,10 +1875,29 @@ export default function App() {
         <div className="canvas-panel">
           <div className="canvas-header">
             <div className="canvas-meta-bar">
-              <span className="canvas-title">
-                {isGenerating ? '生成中' : results.length ? `${results.length} 张结果` : '等待生成'}
-              </span>
-              <span className="canvas-timer">{resultTimer}</span>
+              <div className="canvas-meta-copy">
+                <span className="canvas-title">
+                  {isGenerating ? '生成中' : results.length ? `${results.length} 张结果` : '等待生成'}
+                </span>
+                <span className="canvas-timer">{resultTimer}</span>
+              </div>
+              {results.length
+                ? (
+                    <button
+                      className={`favorite-btn canvas-favorite-btn ${activeHistoryRecord?.isFavorite ? 'active' : ''}`}
+                      type="button"
+                      disabled={!activeHistoryRecord || activeFavoritePending}
+                      title={activeHistoryRecord ? '' : '记录保存后可收藏'}
+                      onClick={() => {
+                        if (activeHistoryRecord?.id !== undefined)
+                          void toggleHistoryFavorite(activeHistoryRecord.id, !activeHistoryRecord.isFavorite)
+                      }}
+                    >
+                      <span aria-hidden="true">{activeHistoryRecord?.isFavorite ? '★' : '☆'}</span>
+                      {activeFavoritePending ? '保存中...' : activeHistoryRecord?.isFavorite ? '已收藏' : '收藏本次'}
+                    </button>
+                  )
+                : null}
             </div>
           </div>
 
@@ -1699,6 +2024,160 @@ export default function App() {
             <pre>{upscaleResponseJson}</pre>
           </details>
         </div>
+      </div>
+    )
+  }
+
+  function renderStandaloneUpscaleView() {
+    const hasSource = !!standaloneUpscale.sourceBase64
+    const sourceUrl = hasSource ? `data:${standaloneUpscale.mimeType || 'image/png'};base64,${standaloneUpscale.sourceBase64}` : ''
+    const outputUrl = standaloneUpscale.outputBase64 ? `data:image/png;base64,${standaloneUpscale.outputBase64}` : ''
+    const targetWidth = hasSource ? Math.round(standaloneUpscale.sourceWidth * standaloneUpscale.factor) : 0
+    const targetHeight = hasSource ? Math.round(standaloneUpscale.sourceHeight * standaloneUpscale.factor) : 0
+    const canRunStandalone = hasSource && isUpscaleProviderConfigured(currentUpscaleProvider) && !standaloneUpscale.isProcessing
+
+    return (
+      <div className="standalone-upscale-layout">
+        <section className="panel standalone-control-panel">
+          <div className="panel-heading compact">
+            <div>
+              <h2>图片上传</h2>
+              <div className="panel-caption">选择一张本地图片，直接执行超分处理。</div>
+            </div>
+          </div>
+
+          <label
+            className={`standalone-dropzone ${hasSource ? 'has-file' : ''}`}
+            onDragOver={event => event.preventDefault()}
+            onDrop={handleStandaloneDrop}
+          >
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={standaloneUpscale.isProcessing}
+              onChange={handleStandaloneFileInput}
+            />
+            <span className="standalone-dropzone-icon">⇧</span>
+            <strong>{hasSource ? standaloneUpscale.fileName : '点击或拖入图片'}</strong>
+            <span>{hasSource ? `${formatSize(standaloneUpscale.fileSize)} · ${standaloneUpscale.mimeType || 'image'}` : '支持 PNG、JPG、WEBP'}</span>
+          </label>
+
+          <div className="standalone-info-grid">
+            <div>
+              <span>原图尺寸</span>
+              <strong>{hasSource ? formatImageDimensions({ width: standaloneUpscale.sourceWidth, height: standaloneUpscale.sourceHeight }) : '-'}</strong>
+            </div>
+            <div>
+              <span>目标尺寸</span>
+              <strong>{hasSource ? formatImageDimensions({ width: targetWidth, height: targetHeight }) : '-'}</strong>
+            </div>
+          </div>
+
+          <div className={`standalone-provider-status ${isUpscaleProviderConfigured(currentUpscaleProvider) ? 'ready' : 'empty'}`}>
+            <div>
+              <span>当前超分服务</span>
+              <strong>{currentUpscaleProvider ? currentUpscaleProvider.name : '未选择'}</strong>
+              <small>{currentUpscaleProvider ? getUpscaleProviderTypeLabel(currentUpscaleProvider.provider) : '请在设置页选择服务'}</small>
+            </div>
+            <button className="secondary" type="button" disabled={standaloneUpscale.isProcessing} onClick={() => setView('settings')}>
+              去设置
+            </button>
+          </div>
+
+          <div className="field">
+            <label>放大倍率</label>
+            <div className="standalone-factor-row">
+              {([2, 3, 4] as StandaloneUpscaleFactor[]).map(factor => (
+                <button
+                  key={factor}
+                  className={`chip ${standaloneUpscale.factor === factor ? 'active' : ''}`}
+                  type="button"
+                  disabled={standaloneUpscale.isProcessing}
+                  onClick={() => setStandaloneFactor(factor)}
+                >
+                  {factor}X
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="standalone-action-row">
+            <button type="button" disabled={!canRunStandalone} onClick={() => void runStandaloneUpscale()}>
+              {standaloneUpscale.isProcessing ? '超分处理中...' : '开始超分'}
+            </button>
+            <button className="secondary" type="button" disabled={standaloneUpscale.isProcessing || !hasSource} onClick={resetStandaloneUpscale}>
+              重新上传
+            </button>
+          </div>
+
+        </section>
+
+        <section className="panel standalone-preview-panel">
+          <div className="panel-heading compact">
+            <div>
+              <h2>超分预览</h2>
+              <div className="panel-caption">{outputUrl ? `输出 ${formatImageDimensions({ width: standaloneUpscale.outputWidth, height: standaloneUpscale.outputHeight })}` : '原图与结果会在这里并排展示。'}</div>
+            </div>
+            {outputUrl
+              ? (
+                  <button className="dl-btn" type="button" onClick={downloadStandaloneOutput}>下载超分图</button>
+                )
+              : null}
+          </div>
+
+          <div className={`standalone-preview-grid ${outputUrl ? 'has-output' : ''}`}>
+            <div className="standalone-preview-card">
+              <div className="standalone-preview-head">
+                <span>原图</span>
+                <span>{hasSource ? formatImageDimensions({ width: standaloneUpscale.sourceWidth, height: standaloneUpscale.sourceHeight }) : '-'}</span>
+              </div>
+              {sourceUrl
+                ? <img src={sourceUrl} alt="独立超分原图" onClick={() => setPreviewImage(sourceUrl)} />
+                : (
+                    <div className="standalone-preview-empty">
+                      <strong>暂无图片</strong>
+                      <span>上传图片后开始处理。</span>
+                    </div>
+                  )}
+            </div>
+
+            <div className="standalone-preview-card">
+              <div className="standalone-preview-head">
+                <span>超分图</span>
+                <span>{outputUrl ? formatImageDimensions({ width: standaloneUpscale.outputWidth, height: standaloneUpscale.outputHeight }) : hasSource ? `预计 ${targetWidth} × ${targetHeight}px` : '-'}</span>
+              </div>
+              {outputUrl
+                ? <img src={outputUrl} alt="独立超分结果" onClick={() => setPreviewImage(outputUrl)} />
+                : (
+                    <div className="standalone-preview-empty">
+                      <strong>{standaloneUpscale.isProcessing ? '处理中' : '等待超分'}</strong>
+                      <span>{hasSource ? '确认倍率后点击开始超分。' : '先上传一张图片。'}</span>
+                    </div>
+                  )}
+            </div>
+          </div>
+
+          <div className="standalone-result-actions">
+            <button
+              className={`favorite-btn ${standaloneActiveRecord?.isFavorite ? 'active' : ''}`}
+              type="button"
+              disabled={!standaloneActiveRecord || standaloneFavoritePending}
+              onClick={() => {
+                if (standaloneActiveRecord?.id !== undefined)
+                  void toggleHistoryFavorite(standaloneActiveRecord.id, !standaloneActiveRecord.isFavorite)
+              }}
+            >
+              <span aria-hidden="true">{standaloneActiveRecord?.isFavorite ? '★' : '☆'}</span>
+              {standaloneFavoritePending ? '保存中...' : standaloneActiveRecord?.isFavorite ? '已收藏' : '收藏记录'}
+            </button>
+            <span>{standaloneUpscale.activeRecordId ? `历史记录 #${standaloneUpscale.activeRecordId}` : outputUrl ? '结果已生成，历史保存后可收藏' : '完成后会保存到历史记录'}</span>
+          </div>
+
+          <details className="panel request-panel standalone-response-panel">
+            <summary>独立超分响应 JSON</summary>
+            <pre>{standaloneUpscale.responseJson}</pre>
+          </details>
+        </section>
       </div>
     )
   }
@@ -1959,19 +2438,26 @@ export default function App() {
 
           <div className="view-body">
             {view === 'workspace' ? renderWorkspaceView() : null}
+            {view === 'upscale' ? renderStandaloneUpscaleView() : null}
             {view === 'history'
               ? (
                   <HistoryView
                     historyRecords={historyRecords}
                     historySearch={historySearch}
                     historyModelFilter={historyModelFilter}
+                    historyFavoriteFilter={historyFavoriteFilter}
+                    historyModeFilter={historyModeFilter}
                     storageUsed={storageUsed}
                     maxStorage={MAX_STORAGE}
                     onHistorySearchChange={setHistorySearch}
                     onHistoryModelFilterChange={setHistoryModelFilter}
+                    onHistoryFavoriteFilterChange={setHistoryFavoriteFilter}
+                    onHistoryModeFilterChange={setHistoryModeFilter}
                     onClearHistory={clearHistory}
                     onRecallHistory={recallHistory}
                     onRemoveHistory={removeHistory}
+                    onToggleFavorite={toggleHistoryFavorite}
+                    favoritePendingIds={favoritePendingIds}
                   />
                 )
               : null}
@@ -2426,6 +2912,26 @@ function readBase64ImageSize(imageBase64: string) {
     image.onerror = () => reject(new Error('图片尺寸读取失败'))
     image.src = `data:image/png;base64,${imageBase64}`
   })
+}
+
+function readImageFileSize(file: File) {
+  return new Promise<ImageDimensions>((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve({ width: image.naturalWidth, height: image.naturalHeight })
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('图片尺寸读取失败'))
+    }
+    image.src = url
+  })
+}
+
+function normalizeStandaloneFactor(value: number | undefined): StandaloneUpscaleFactor {
+  return value === 3 || value === 4 ? value : 2
 }
 
 function getBase64ByteLength(imageBase64: string) {

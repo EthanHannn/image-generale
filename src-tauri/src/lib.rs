@@ -130,6 +130,17 @@ struct RequestParams {
     generation_height: Option<i64>,
     auto_upscale: Option<bool>,
     auto_upscale_factor: Option<i64>,
+    standalone_upscale: Option<bool>,
+    source_file_name: Option<String>,
+    source_file_size: Option<i64>,
+    source_mime_type: Option<String>,
+    source_width: Option<i64>,
+    source_height: Option<i64>,
+    upscale_provider_id: Option<String>,
+    upscale_provider_name: Option<String>,
+    upscale_factor: Option<i64>,
+    output_width: Option<i64>,
+    output_height: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +162,10 @@ struct HistoryRecordPayload {
     total_size: i64,
     #[serde(default)]
     upscale_images_base64: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    is_favorite: bool,
+    #[serde(default)]
+    favorited_at: Option<i64>,
 }
 
 impl Default for AppConfig {
@@ -258,19 +273,39 @@ fn open_history_db(app: &AppHandle) -> Result<Connection, String> {
       ",
         )
         .map_err(|error| error.to_string())?;
-    match connection.execute(
+    add_history_column(
+        &connection,
         "ALTER TABLE history_records ADD COLUMN upscale_images_json TEXT NOT NULL DEFAULT '{}'",
-        [],
-    ) {
-        Ok(_) => {}
+    )?;
+    add_history_column(
+        &connection,
+        "ALTER TABLE history_records ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_history_column(
+        &connection,
+        "ALTER TABLE history_records ADD COLUMN favorited_at INTEGER",
+    )?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_history_favorite ON history_records(is_favorite, favorited_at)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(connection)
+}
+
+fn add_history_column(connection: &Connection, sql: &str) -> Result<(), String> {
+    match connection.execute(sql, []) {
+        Ok(_) => Ok(()),
         Err(error) => {
-            if !error.to_string().contains("duplicate column name") {
-                return Err(error.to_string());
+            if error.to_string().contains("duplicate column name") {
+                Ok(())
+            } else {
+                Err(error.to_string())
             }
         }
     }
-
-    Ok(connection)
 }
 
 fn now_millis() -> i128 {
@@ -401,6 +436,8 @@ fn row_to_history_payload(
     let images_base64 = read_history_images(app, &images_json)?;
     let upscale_images_base64 = read_upscale_images(app, &upscale_images_json)?;
 
+    let is_favorite: i64 = row.get("is_favorite").map_err(|error| error.to_string())?;
+
     Ok(HistoryRecordPayload {
         id: row.get("id").map_err(|error| error.to_string())?,
         timestamp: row.get("timestamp").map_err(|error| error.to_string())?,
@@ -419,6 +456,8 @@ fn row_to_history_payload(
         request_json: row.get("request_json").map_err(|error| error.to_string())?,
         total_size: row.get("total_size").map_err(|error| error.to_string())?,
         upscale_images_base64,
+        is_favorite: is_favorite != 0,
+        favorited_at: row.get("favorited_at").map_err(|error| error.to_string())?,
     })
 }
 
@@ -484,8 +523,8 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
       INSERT INTO history_records (
         timestamp, provider_id, provider_name, mode, model_id, model_name,
         prompt, params_json, images_json, image_count, duration, request_json, total_size,
-        upscale_images_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        upscale_images_json, is_favorite, favorited_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ",
             params![
                 record.timestamp,
@@ -502,11 +541,35 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
                 record.request_json,
                 record.total_size,
                 upscale_images_json,
+                if record.is_favorite { 1 } else { 0 },
+                record.favorited_at,
             ],
         )
         .map_err(|error| error.to_string())?;
 
     Ok(connection.last_insert_rowid())
+}
+
+#[tauri::command]
+fn set_history_record_favorite(
+    app: AppHandle,
+    record_id: i64,
+    is_favorite: bool,
+    favorited_at: Option<i64>,
+) -> Result<(), String> {
+    let connection = open_history_db(&app)?;
+    let next_favorited_at = if is_favorite { favorited_at } else { None };
+    connection
+        .execute(
+            "UPDATE history_records SET is_favorite = ?, favorited_at = ? WHERE id = ?",
+            params![
+                if is_favorite { 1 } else { 0 },
+                next_favorited_at,
+                record_id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -638,7 +701,9 @@ fn get_history_record(app: AppHandle, id: i64) -> Result<Option<HistoryRecordPay
 fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
     let connection = open_history_db(&app)?;
     let mut statement = connection
-        .prepare("SELECT images_json, upscale_images_json FROM history_records WHERE id = ? LIMIT 1")
+        .prepare(
+            "SELECT images_json, upscale_images_json FROM history_records WHERE id = ? LIMIT 1",
+        )
         .map_err(|error| error.to_string())?;
     let paths_json = statement
         .query_row(params![id], |row| {
@@ -688,7 +753,9 @@ fn enforce_history_storage_limit(app: AppHandle, max_storage: i64) -> Result<(),
 
     let connection = open_history_db(&app)?;
     let mut statement = connection
-        .prepare("SELECT id, total_size FROM history_records ORDER BY timestamp ASC")
+        .prepare(
+            "SELECT id, total_size FROM history_records WHERE is_favorite = 0 ORDER BY timestamp ASC",
+        )
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
@@ -773,7 +840,21 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
         if segment_len < 2 || offset + segment_len > data.len() {
             return None;
         }
-        if matches!(marker, 0xC0 | 0xC1 | 0xC2 | 0xC3 | 0xC5 | 0xC6 | 0xC7 | 0xC9 | 0xCA | 0xCB | 0xCD | 0xCE | 0xCF) {
+        if matches!(
+            marker,
+            0xC0 | 0xC1
+                | 0xC2
+                | 0xC3
+                | 0xC5
+                | 0xC6
+                | 0xC7
+                | 0xC9
+                | 0xCA
+                | 0xCB
+                | 0xCD
+                | 0xCE
+                | 0xCF
+        ) {
             if offset + 7 > data.len() {
                 return None;
             }
@@ -988,7 +1069,17 @@ fn find_url_in_json(value: &serde_json::Value) -> Option<String> {
             None
         }
         serde_json::Value::Object(map) => {
-            for key in ["ResultUrl", "resultUrl", "result_url", "Result", "result", "Url", "url", "ImageUrl", "imageUrl"] {
+            for key in [
+                "ResultUrl",
+                "resultUrl",
+                "result_url",
+                "Result",
+                "result",
+                "Url",
+                "url",
+                "ImageUrl",
+                "imageUrl",
+            ] {
                 if let Some(found) = map.get(key).and_then(find_url_in_json) {
                     return Some(found);
                 }
@@ -1184,7 +1275,12 @@ async fn submit_super_resolution(
         .as_str()
         .or_else(|| json["RequestId"].as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| format!("GenerateSuperResolutionImage 响应缺少 ResultUrl、JobId 或 RequestId: {}", json))?;
+        .ok_or_else(|| {
+            format!(
+                "GenerateSuperResolutionImage 响应缺少 ResultUrl、JobId 或 RequestId: {}",
+                json
+            )
+        })?;
     Ok((SubmitResult::AsyncJob(job_id), json))
 }
 
@@ -1229,7 +1325,10 @@ async fn poll_super_resolution(
         }
     }
 
-    Err(format!("超分任务超时（180 秒无结果），轮询响应: {}", serde_json::json!(responses)))
+    Err(format!(
+        "超分任务超时（180 秒无结果），轮询响应: {}",
+        serde_json::json!(responses)
+    ))
 }
 
 // 阿里云超分 Tauri 命令
@@ -1343,6 +1442,7 @@ pub fn run() {
             open_history_directory,
             get_history_root_dir,
             add_history_record,
+            set_history_record_favorite,
             save_history_upscale_variant,
             list_history_records,
             get_history_record,

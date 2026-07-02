@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { HistoryRecord } from '../../lib/storage'
 import { formatSize, formatTime } from '../../lib/utils'
@@ -9,14 +9,19 @@ type HistoryRecordCardProps = {
   record: HistoryRecord
   onRecallHistory: (recordId: number) => void | Promise<void>
   onRemoveHistory: (recordId: number) => void | Promise<void>
+  onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
+  favoritePending: boolean
 }
 
 export function HistoryRecordCard(props: HistoryRecordCardProps) {
-  const { record, onRecallHistory, onRemoveHistory } = props
-  const imageUrls = useObjectUrls(record.images || EMPTY_HISTORY_IMAGES)
+  const { record, onRecallHistory, onRemoveHistory, onToggleFavorite, favoritePending } = props
+  const displayImages = useMemo(() => getHistoryDisplayImages(record), [record])
+  const imageUrls = useObjectUrls(displayImages)
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const promptSummary = record.prompt || '(无 Prompt)'
-  const sizeLabel = record.params.resolution || record.params.size || '未记录尺寸'
+  const modeText = getHistoryModeText(record.mode)
+  const sizeLabel = getHistorySizeLabel(record)
+  const titleLabel = record.mode === 'upscale' ? (record.providerName || record.modelName || '超分服务') : record.modelId
   const previewUrl = previewIndex !== null ? imageUrls[previewIndex] : ''
   const hasPreview = previewIndex !== null && !!previewUrl
   const hasMultipleImages = imageUrls.length > 1
@@ -58,6 +63,13 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     setPreviewIndex(current => current === null ? current : getNextImageIndex(current, imageUrls.length))
   }
 
+  function toggleFavorite(event: React.MouseEvent) {
+    event.stopPropagation()
+    if (record.id === undefined || favoritePending)
+      return
+    void onToggleFavorite(record.id, !record.isFavorite)
+  }
+
   return (
     <div className="history-card">
       <div className="history-thumb-rail">
@@ -77,18 +89,31 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
                 ))}
               </div>
             )
-          : <div className="thumb-placeholder history-thumb-placeholder">{record.mode === 'edit' ? '🖼' : '✨'}</div>}
+          : <div className="thumb-placeholder history-thumb-placeholder">{record.mode === 'edit' ? '🖼' : record.mode === 'upscale' ? '⇧' : '✨'}</div>}
       </div>
       <div className="card-body history-card-body">
         <div className="history-card-topline">
-          <span className="model-tag">{record.modelId}</span>
-          <span className="history-card-timestamp">{formatTime(record.timestamp)}</span>
+          <div className="history-card-title-row">
+            <span className="model-tag">{titleLabel}</span>
+            <span className="history-card-timestamp">{formatTime(record.timestamp)}</span>
+          </div>
+          <button
+            className={`favorite-icon-btn history-favorite-btn ${record.isFavorite ? 'active' : ''}`}
+            type="button"
+            disabled={record.id === undefined || favoritePending}
+            aria-label={record.isFavorite ? '取消收藏' : '收藏记录'}
+            title={record.isFavorite ? '取消收藏' : '收藏记录'}
+            onClick={toggleFavorite}
+          >
+            {favoritePending ? '...' : record.isFavorite ? '★' : '☆'}
+          </button>
         </div>
         <div className="history-card-prompt" title={promptSummary}>{promptSummary}</div>
         <div className="history-card-summary">
-          <span className={`history-mode-tag ${record.mode === 'edit' ? 'edit' : 'gen'}`}>
-            {record.mode === 'edit' ? '图生图' : '文生图'}
+          <span className={`history-mode-tag ${record.mode === 'edit' ? 'edit' : record.mode === 'upscale' ? 'upscale' : 'gen'}`}>
+            {modeText}
           </span>
+          {record.isFavorite ? <span className="history-favorite-tag">收藏</span> : null}
           <span>{record.imageCount} 张图片</span>
           <span>{sizeLabel}</span>
           <span>{record.duration}s</span>
@@ -100,7 +125,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
         </div>
       </div>
       <div className="card-actions history-card-actions" onClick={event => event.stopPropagation()}>
-        <button className="history-action-btn primary-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>回显到工作台</button>
+        <button className="history-action-btn primary-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>{record.mode === 'upscale' ? '回显到超分台' : '回显到工作台'}</button>
         <button className="history-action-btn delete-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id)}>删除记录</button>
       </div>
       {hasPreview
@@ -127,6 +152,38 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
         : null}
     </div>
   )
+}
+
+function getHistoryModeText(mode: HistoryRecord['mode']) {
+  if (mode === 'edit')
+    return '图生图'
+  if (mode === 'upscale')
+    return '单独超分'
+  return '文生图'
+}
+
+function getHistorySizeLabel(record: HistoryRecord) {
+  if (record.mode === 'upscale') {
+    const source = record.params.sourceWidth && record.params.sourceHeight
+      ? `${record.params.sourceWidth} × ${record.params.sourceHeight}`
+      : '原图'
+    const output = record.params.outputWidth && record.params.outputHeight
+      ? `${record.params.outputWidth} × ${record.params.outputHeight}`
+      : record.params.targetWidth && record.params.targetHeight
+        ? `${record.params.targetWidth} × ${record.params.targetHeight}`
+        : '超分图'
+    return `${source} -> ${output}`
+  }
+  return record.params.resolution || record.params.size || '未记录尺寸'
+}
+
+function getHistoryDisplayImages(record: HistoryRecord) {
+  if (record.mode !== 'upscale')
+    return record.images || EMPTY_HISTORY_IMAGES
+
+  const factor = record.params.upscaleFactor || 2
+  const output = record.upscaledImages?.[0]?.[factor]
+  return output ? [output, ...(record.images || [])] : (record.images || EMPTY_HISTORY_IMAGES)
 }
 
 function getPreviousImageIndex(index: number, total: number) {

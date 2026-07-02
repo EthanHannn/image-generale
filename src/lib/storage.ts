@@ -4,7 +4,7 @@ export const CFG_KEY = 'img-tool-cfg'
 export const THEME_KEY = 'img-tool-theme'
 export const UPSCALE_KEY = 'img-tool-upscale'
 const DB_NAME = 'ImageGenHistoryDB'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE_NAME = 'records'
 export const MAX_STORAGE = 1024 * 1024 * 1024
 
@@ -32,6 +32,17 @@ export type RequestParams = {
   generationHeight?: number
   autoUpscale?: boolean
   autoUpscaleFactor?: number
+  standaloneUpscale?: boolean
+  sourceFileName?: string
+  sourceFileSize?: number
+  sourceMimeType?: string
+  sourceWidth?: number
+  sourceHeight?: number
+  upscaleProviderId?: string
+  upscaleProviderName?: string
+  upscaleFactor?: number
+  outputWidth?: number
+  outputHeight?: number
 }
 
 export type HistoryRecord = {
@@ -39,7 +50,7 @@ export type HistoryRecord = {
   timestamp: number
   providerId: string
   providerName: string
-  mode: 'gen' | 'edit'
+  mode: 'gen' | 'edit' | 'upscale'
   modelId: string
   modelName: string
   prompt: string
@@ -50,6 +61,8 @@ export type HistoryRecord = {
   requestJson: string
   totalSize: number
   upscaledImages?: Record<number, Record<number, Blob>>
+  isFavorite?: boolean
+  favoritedAt?: number | null
 }
 
 type DesktopHistoryRecord = Omit<HistoryRecord, 'images'> & {
@@ -262,6 +275,8 @@ function deserializeHistoryRecord(record: DesktopHistoryRecord): HistoryRecord {
     ...record,
     images: (record.imagesBase64 || []).map(base64 => base64ToBlob(base64)),
     upscaledImages,
+    isFavorite: !!record.isFavorite,
+    favoritedAt: record.favoritedAt || null,
   }
 }
 
@@ -270,11 +285,18 @@ function openDb() {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
     request.onupgradeneeded = () => {
       const database = request.result
+      let store: IDBObjectStore
       if (!database.objectStoreNames.contains(STORE_NAME)) {
-        const store = database.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true })
+        store = database.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true })
         store.createIndex('by_timestamp', 'timestamp', { unique: false })
         store.createIndex('by_modelId', 'modelId', { unique: false })
       }
+      else {
+        store = request.transaction!.objectStore(STORE_NAME)
+      }
+
+      if (!store.indexNames.contains('by_favorite'))
+        store.createIndex('by_favorite', 'isFavorite', { unique: false })
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
@@ -450,12 +472,18 @@ export async function getHistoryRootDir() {
 }
 
 export function addRecord(record: HistoryRecord) {
+  const nextRecord: HistoryRecord = {
+    ...record,
+    isFavorite: !!record.isFavorite,
+    favoritedAt: record.favoritedAt || null,
+  }
+
   if (isDesktopApp()) {
-    return serializeHistoryRecord(record).then(serialized => invokeDesktop<number>('add_history_record', { record: serialized }))
+    return serializeHistoryRecord(nextRecord).then(serialized => invokeDesktop<number>('add_history_record', { record: serialized }))
   }
 
   return withStore<number>('readwrite', (store, resolve, reject) => {
-    const request = store.add(record)
+    const request = store.add(nextRecord)
     request.onsuccess = () => resolve(Number(request.result))
     request.onerror = () => reject(request.error)
   })
@@ -551,6 +579,33 @@ export function deleteRecord(id: number) {
   })
 }
 
+export function setRecordFavorite(id: number, isFavorite: boolean) {
+  const favoritedAt = isFavorite ? Date.now() : null
+
+  if (isDesktopApp()) {
+    return invokeDesktop<void>('set_history_record_favorite', {
+      recordId: id,
+      isFavorite,
+      favoritedAt,
+    })
+  }
+
+  return withStore<void>('readwrite', (store, resolve, reject) => {
+    const request = store.get(id)
+    request.onsuccess = () => {
+      const record = request.result as HistoryRecord | undefined
+      if (!record) {
+        resolve()
+        return
+      }
+      const updateRequest = store.put({ ...record, isFavorite, favoritedAt })
+      updateRequest.onsuccess = () => resolve()
+      updateRequest.onerror = () => reject(updateRequest.error)
+    }
+    request.onerror = () => reject(request.error)
+  })
+}
+
 export function clearAllRecords() {
   if (isDesktopApp())
     return invokeDesktop<void>('clear_history_records')
@@ -584,6 +639,8 @@ export async function enforceStorageLimit() {
   for (const record of records) {
     if (total <= MAX_STORAGE)
       break
+    if (record.isFavorite)
+      continue
     if (record.id !== undefined)
       await deleteRecord(record.id)
     total -= record.totalSize || 0
