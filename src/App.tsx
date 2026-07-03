@@ -191,6 +191,7 @@ export default function App() {
   const initialConfig = loadConfig()
   const initialUpscaleStore = loadUpscaleProviders()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null)
   const toastTimerRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -387,12 +388,66 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape')
-        closeImagePreview()
+      if (event.defaultPrevented)
+        return
+
+      const hasHistoryPreview = !!document.querySelector('.history-preview-modal')
+
+      if (hasHistoryPreview) {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'g')
+          event.preventDefault()
+        return
+      }
+
+      if (event.key === 'Escape') {
+        if (previewImage) {
+          event.preventDefault()
+          closeImagePreview()
+          return
+        }
+
+        if (providerModalOpen) {
+          event.preventDefault()
+          closeProviderModal()
+          return
+        }
+
+        if (upscaleModalOpen) {
+          event.preventDefault()
+          closeUpscaleModal()
+          return
+        }
+
+        if (isGenerating) {
+          event.preventDefault()
+          cancelGeneration()
+        }
+        return
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'g') {
+        event.preventDefault()
+        focusPromptInput()
+      }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [previewImage, providerModalOpen, upscaleModalOpen, isGenerating])
+
+  function focusPromptInput() {
+    if (previewImage || providerModalOpen || upscaleModalOpen)
+      return
+
+    setView('workspace')
+    window.setTimeout(() => {
+      const input = promptInputRef.current
+      if (!input)
+        return
+      input.focus()
+      const cursor = input.value.length
+      input.setSelectionRange(cursor, cursor)
+    }, 0)
+  }
 
   async function refreshHistory() {
     const records = await getAllRecords()
@@ -1884,11 +1939,12 @@ export default function App() {
                 <label htmlFor="prompt">Prompt</label>
                 <textarea
                   id="prompt"
+                  ref={promptInputRef}
                   value={prompt}
                   placeholder="输入你想生成的画面描述，Ctrl + Enter 可直接提交"
                   onChange={event => setPrompt(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.ctrlKey && event.key === 'Enter')
+                    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing)
                       void generate()
                   }}
                 />
