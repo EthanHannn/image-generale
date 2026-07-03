@@ -55,6 +55,9 @@ type ImageContextMenuState = {
   y: number
   target: ImageContextMenuTarget
 }
+type GlobalDropTarget =
+  | { status: 'ready'; kind: 'workspace' | 'upscale'; title: string; hint: string }
+  | { status: 'blocked'; title: string; hint: string }
 type ImagePreviewState = {
   image: string
   title: string
@@ -207,6 +210,7 @@ export default function App() {
   const abortControllerRef = useRef<AbortController | null>(null)
   const modalDirtyRef = useRef(false)
   const previewPanRef = useRef<{ x: number; y: number } | null>(null)
+  const dragDepthRef = useRef(0)
 
   const [theme, setTheme] = useState<ThemeName>(getInitialTheme)
   const [providers, setProviders] = useState<ProviderConfig[]>(initialConfig.providers)
@@ -246,6 +250,7 @@ export default function App() {
   const [imageContextMenu, setImageContextMenu] = useState<ImageContextMenuState | null>(null)
   const [previewImage, setPreviewImage] = useState<ImagePreviewState | null>(null)
   const [previewDragging, setPreviewDragging] = useState(false)
+  const [globalDropTarget, setGlobalDropTarget] = useState<GlobalDropTarget | null>(null)
 
   const [upscaleProviders, setUpscaleProviders] = useState<UpscaleProviderConfig[]>(initialUpscaleStore.providers)
   const [currentUpscaleProviderId, setCurrentUpscaleProviderId] = useState(initialUpscaleStore.currentProviderId)
@@ -491,6 +496,178 @@ export default function App() {
       window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2500)
   }
+
+  function isFileDrag(event: globalThis.DragEvent) {
+    const types = event.dataTransfer?.types
+    return !!types && Array.from(types).includes('Files')
+  }
+
+  function getImageFiles(files: FileList | null | undefined) {
+    return Array.from(files || []).filter(file => file.type.startsWith('image/'))
+  }
+
+  function getGlobalDropTarget(): GlobalDropTarget {
+    const hasHistoryPreview = !!document.querySelector('.history-preview-modal')
+    if (previewImage || providerModalOpen || upscaleModalOpen || hasHistoryPreview) {
+      return {
+        status: 'blocked',
+        title: '当前弹层不支持拖入图片',
+        hint: '关闭预览或设置弹窗后再拖入。',
+      }
+    }
+
+    if (view === 'workspace') {
+      if (mode !== 'edit') {
+        return {
+          status: 'blocked',
+          title: '当前模式不支持拖入图片',
+          hint: '切换到图生图后可拖放参考图。',
+        }
+      }
+      if (isGenerating) {
+        return {
+          status: 'blocked',
+          title: '生成中暂不能拖入参考图',
+          hint: '等待当前任务结束后再替换参考图。',
+        }
+      }
+      return {
+        status: 'ready',
+        kind: 'workspace',
+        title: '拖放文件作为参考图',
+        hint: '松开后载入 JPG / PNG / WebP 等图片文件。',
+      }
+    }
+
+    if (view === 'upscale') {
+      if (standaloneUpscale.isProcessing) {
+        return {
+          status: 'blocked',
+          title: '超分处理中暂不能替换图片',
+          hint: '等待当前超分任务完成后再拖入新图片。',
+        }
+      }
+      return {
+        status: 'ready',
+        kind: 'upscale',
+        title: '拖放文件开始超分',
+        hint: '松开后载入第一张图片作为独立超分源图。',
+      }
+    }
+
+    return {
+      status: 'blocked',
+      title: '当前页面不支持拖入图片',
+      hint: '请进入工作台图生图或独立超分页面。',
+    }
+  }
+
+  function acceptWorkspaceDropFiles(files: File[]) {
+    const maxFiles = currentModel?.maxInputImages ?? files.length
+    if (maxFiles <= 0) {
+      showToast('当前模型不支持参考图', 'error')
+      return
+    }
+
+    const nextFiles = files.slice(0, maxFiles)
+    setRefFiles(nextFiles)
+    if (files.length > nextFiles.length) {
+      showToast(`已载入 ${nextFiles.length} 张参考图，超过上限的已忽略`, 'success')
+      return
+    }
+    showToast(`已载入 ${nextFiles.length} 张参考图`, 'success')
+  }
+
+  function handleGlobalDrop(event: globalThis.DragEvent) {
+    const dropTarget = getGlobalDropTarget()
+    const imageFiles = getImageFiles(event.dataTransfer?.files)
+    if (!imageFiles.length) {
+      showToast('请拖入图片文件', 'error')
+      return
+    }
+
+    if (dropTarget.status === 'blocked') {
+      showToast(dropTarget.title, 'error')
+      return
+    }
+
+    if (dropTarget.kind === 'workspace') {
+      acceptWorkspaceDropFiles(imageFiles)
+      return
+    }
+
+    void handleStandaloneUpscaleFile(imageFiles[0])
+  }
+
+  useEffect(() => {
+    function updateDropTarget(event: globalThis.DragEvent) {
+      const dropTarget = getGlobalDropTarget()
+      setGlobalDropTarget(dropTarget)
+      if (event.dataTransfer)
+        event.dataTransfer.dropEffect = dropTarget.status === 'ready' ? 'copy' : 'none'
+    }
+
+    function onDragEnter(event: globalThis.DragEvent) {
+      if (!isFileDrag(event))
+        return
+
+      event.preventDefault()
+      if (imageContextMenu)
+        closeImageContextMenu()
+      dragDepthRef.current += 1
+      updateDropTarget(event)
+    }
+
+    function onDragOver(event: globalThis.DragEvent) {
+      if (!isFileDrag(event))
+        return
+
+      event.preventDefault()
+      updateDropTarget(event)
+    }
+
+    function onDragLeave(event: globalThis.DragEvent) {
+      if (!isFileDrag(event))
+        return
+
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+      if (dragDepthRef.current === 0)
+        setGlobalDropTarget(null)
+    }
+
+    function onDrop(event: globalThis.DragEvent) {
+      if (!isFileDrag(event))
+        return
+
+      event.preventDefault()
+      dragDepthRef.current = 0
+      setGlobalDropTarget(null)
+      handleGlobalDrop(event)
+    }
+
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [
+    currentModel?.maxInputImages,
+    imageContextMenu,
+    isGenerating,
+    mode,
+    previewImage,
+    providerModalOpen,
+    standaloneUpscale.factor,
+    standaloneUpscale.isProcessing,
+    upscaleModalOpen,
+    view,
+  ])
 
   function getSavedFileLabel(path: string | undefined, fallback: string) {
     if (!path)
@@ -1599,6 +1776,7 @@ export default function App() {
 
   function handleStandaloneDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault()
+    event.stopPropagation()
     const file = event.dataTransfer.files?.[0]
     if (file)
       void handleStandaloneUpscaleFile(file)
@@ -2976,6 +3154,18 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {globalDropTarget
+        ? (
+            <div className={`global-drop-overlay ${globalDropTarget.status}`}>
+              <div className="global-drop-panel">
+                <div className="global-drop-icon">{globalDropTarget.status === 'ready' ? '⇧' : '!'}</div>
+                <strong>{globalDropTarget.title}</strong>
+                <span>{globalDropTarget.hint}</span>
+              </div>
+            </div>
+          )
+        : null}
 
       {imageContextMenu
         ? (

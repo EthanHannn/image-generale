@@ -21,6 +21,7 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
+        "dragDropEnabled": false,
         "center": true
       }
     ],

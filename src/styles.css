@@ -2053,6 +2053,70 @@ button:disabled {
   box-shadow: none;
 }
 
+.global-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.global-drop-panel {
+  display: grid;
+  justify-items: center;
+  width: min(420px, calc(100vw - 48px));
+  padding: 28px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 62%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-solid) 94%, transparent);
+  color: var(--text);
+  text-align: center;
+  box-shadow: 0 20px 60px var(--shadow);
+}
+
+.global-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-solid));
+  color: var(--accent);
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.global-drop-panel strong {
+  max-width: 100%;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.global-drop-panel span {
+  max-width: 100%;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.global-drop-overlay.blocked .global-drop-panel {
+  border-color: color-mix(in srgb, var(--err) 62%, var(--border));
+}
+
+.global-drop-overlay.blocked .global-drop-icon {
+  background: color-mix(in srgb, var(--err) 16%, var(--panel-solid));
+  color: var(--err);
+}
+
 .result-actions {
   display: flex;
   flex-direction: column;
