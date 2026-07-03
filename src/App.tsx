@@ -34,7 +34,8 @@ import {
 } from './lib/storage'
 import { upscaleImage } from './lib/upscale'
 import { getErrorMessage } from './lib/errors'
-import { base64ToBlob, blobToBase64, downloadBlob, formatSize, sanitizeFilename } from './lib/utils'
+import { saveImageFile } from './lib/files'
+import { base64ToBlob, blobToBase64, formatSize, sanitizeFilename } from './lib/utils'
 
 type StatusType = 'ok' | 'err' | 'loading' | 'warn'
 type StatusValue = { type: StatusType; message: string } | null
@@ -469,6 +470,12 @@ export default function App() {
     if (toastTimerRef.current)
       window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2500)
+  }
+
+  function getSavedFileLabel(path: string | undefined, fallback: string) {
+    if (!path)
+      return fallback
+    return path.split(/[\\/]/).pop() || fallback
   }
 
   function cancelGeneration() {
@@ -1304,10 +1311,18 @@ export default function App() {
       return
     }
     const filename = `${currentModel?.id || 'image'}_${sanitizeFilename(prompt.trim())}_${index + 1}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`
-    downloadBlob(base64ToBlob(imageBase64), filename)
-    setDownloadedIndex(index)
-    window.setTimeout(() => setDownloadedIndex(current => current === index ? null : current), 2000)
-    showToast(`图片已下载：${filename}`, 'success')
+    try {
+      const result = await saveImageFile({ imageBase64, filename, mimeType: 'image/png' })
+      if (result.status === 'cancelled')
+        return
+
+      setDownloadedIndex(index)
+      window.setTimeout(() => setDownloadedIndex(current => current === index ? null : current), 2000)
+      showToast(isDesktopApp() ? `图片已保存：${getSavedFileLabel(result.path, filename)}` : `图片已下载：${filename}`, 'success')
+    }
+    catch (error) {
+      showToast(`保存失败: ${getErrorMessage(error)}`, 'error')
+    }
   }
 
   async function handleCopy(index: number) {
@@ -1597,14 +1612,22 @@ export default function App() {
     }
   }
 
-  function downloadStandaloneOutput() {
+  async function downloadStandaloneOutput() {
     if (!standaloneUpscale.outputBase64) {
       showToast('暂无超分结果可下载', 'error')
       return
     }
     const filename = `upscale_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${standaloneUpscale.factor}x_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`
-    downloadBlob(base64ToBlob(standaloneUpscale.outputBase64), filename)
-    showToast(`图片已下载：${filename}`, 'success')
+    try {
+      const result = await saveImageFile({ imageBase64: standaloneUpscale.outputBase64, filename, mimeType: 'image/png' })
+      if (result.status === 'cancelled')
+        return
+
+      showToast(isDesktopApp() ? `图片已保存：${getSavedFileLabel(result.path, filename)}` : `图片已下载：${filename}`, 'success')
+    }
+    catch (error) {
+      showToast(`保存失败: ${getErrorMessage(error)}`, 'error')
+    }
   }
 
   async function recallHistory(recordId: number) {
@@ -2286,7 +2309,7 @@ export default function App() {
                           <div className="result-actions">
                             <div className="result-primary-actions">
                               <button className={`dl-btn ${downloadedIndex === index ? 'downloaded' : ''}`} type="button" onClick={() => void handleDownload(index)}>
-                                {downloadedIndex === index ? '已下载' : '下载图片'}
+                                {downloadedIndex === index ? '已保存' : '下载图片'}
                               </button>
                               <button className="dl-btn" type="button" onClick={() => void handleCopy(index)}>
                                 {copiedIndex === index ? '已复制' : '复制 Base64'}
@@ -2433,7 +2456,7 @@ export default function App() {
             </div>
             {outputUrl
               ? (
-                  <button className="dl-btn" type="button" onClick={downloadStandaloneOutput}>下载超分图</button>
+                  <button className="dl-btn" type="button" onClick={() => void downloadStandaloneOutput()}>下载超分图</button>
                 )
               : null}
           </div>

@@ -113,6 +113,13 @@ struct AppConfig {
     history_root_dir: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveImageFileResult {
+    status: String,
+    path: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RequestParams {
@@ -505,6 +512,71 @@ fn open_history_directory(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn get_history_root_dir(app: AppHandle) -> Result<String, String> {
     Ok(history_root_dir(&app)?.to_string_lossy().to_string())
+}
+
+fn image_save_filter(mime_type: &str) -> (&'static str, &'static str, &'static [&'static str]) {
+    match mime_type {
+        "image/jpeg" => ("jpg", "JPEG Image", &["jpg", "jpeg"]),
+        "image/webp" => ("webp", "WebP Image", &["webp"]),
+        _ => ("png", "PNG Image", &["png"]),
+    }
+}
+
+fn normalize_save_file_name(filename: &str, extension: &str) -> String {
+    let raw_name = Path::new(filename.trim())
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("image");
+
+    if Path::new(raw_name).extension().is_some() {
+        return raw_name.to_string();
+    }
+
+    let stem = raw_name.trim_end_matches('.');
+    let stem = if stem.is_empty() { "image" } else { stem };
+    format!("{}.{}", stem, extension)
+}
+
+#[tauri::command]
+fn save_image_file(
+    app: AppHandle,
+    image_base64: String,
+    filename: String,
+    mime_type: Option<String>,
+) -> Result<SaveImageFileResult, String> {
+    let mime_type = mime_type.unwrap_or_else(|| "image/png".to_string());
+    let (extension, filter_name, extensions) = image_save_filter(&mime_type);
+    let file_name = normalize_save_file_name(&filename, extension);
+    let mut dialog = FileDialog::new()
+        .set_file_name(file_name)
+        .add_filter(filter_name, extensions);
+    if let Ok(download_dir) = app.path().download_dir() {
+        dialog = dialog.set_directory(download_dir);
+    }
+
+    let Some(selected_path) = dialog.save_file() else {
+        return Ok(SaveImageFileResult {
+            status: "cancelled".to_string(),
+            path: None,
+        });
+    };
+
+    let save_path = if selected_path.extension().is_none() {
+        selected_path.with_extension(extension)
+    } else {
+        selected_path
+    };
+    let bytes = STANDARD
+        .decode(&image_base64)
+        .map_err(|error| format!("图片数据解码失败: {}", error))?;
+    fs::write(&save_path, bytes).map_err(|error| format!("保存图片失败: {}", error))?;
+
+    Ok(SaveImageFileResult {
+        status: "saved".to_string(),
+        path: Some(save_path.to_string_lossy().to_string()),
+    })
 }
 
 #[tauri::command]
@@ -1441,6 +1513,7 @@ pub fn run() {
             select_history_directory,
             open_history_directory,
             get_history_root_dir,
+            save_image_file,
             add_history_record,
             set_history_record_favorite,
             save_history_upscale_variant,
