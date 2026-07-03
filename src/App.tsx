@@ -4,7 +4,8 @@ import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, 
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
-  MAX_STORAGE,
+  DEFAULT_HISTORY_STORAGE_LIMIT_BYTES,
+  DEFAULT_HISTORY_STORAGE_POLICY,
   addRecord,
   deleteRecord,
   enforceStorageLimit,
@@ -25,6 +26,7 @@ import {
   setRecordFavorite,
   upscaleProviderToConfig,
   THEME_KEY,
+  type HistoryStoragePolicy,
   type HistoryRecord,
   type ProviderConfig,
   type RequestParams,
@@ -47,6 +49,7 @@ type UpscaleFactor = 1 | 2 | 3 | 4
 type StandaloneUpscaleFactor = 2 | 3 | 4
 type ImageDimensions = { width: number; height: number }
 type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
+type StorageLimitUnit = 'MB' | 'GB'
 type ImageContextMenuTarget =
   | { type: 'result'; index: number }
   | { type: 'standalone'; imageBase64: string; filename: string; mimeType: ImageMimeType }
@@ -269,6 +272,11 @@ export default function App() {
   const [favoritePendingIds, setFavoritePendingIds] = useState<Record<number, boolean>>({})
   const [storageUsed, setStorageUsed] = useState(0)
   const [historyRootDir, setHistoryRootDir] = useState('')
+  const [historyStoragePolicy, setHistoryStoragePolicy] = useState<HistoryStoragePolicy>(DEFAULT_HISTORY_STORAGE_POLICY)
+  const [storageLimitEnabledDraft, setStorageLimitEnabledDraft] = useState(false)
+  const [storageLimitDraft, setStorageLimitDraft] = useState(String(Math.round(DEFAULT_HISTORY_STORAGE_LIMIT_BYTES / 1024 / 1024 / 1024)))
+  const [storageLimitUnit, setStorageLimitUnit] = useState<StorageLimitUnit>('GB')
+  const [storagePolicyPending, setStoragePolicyPending] = useState(false)
   const [historyDirPending, setHistoryDirPending] = useState(false)
 
   const [providerModalOpen, setProviderModalOpen] = useState(false)
@@ -314,6 +322,8 @@ export default function App() {
       setCurrentUpscaleProviderId(snapshot.currentUpscaleProviderId)
       setTheme(snapshot.theme)
       setHistoryRootDir(snapshot.historyRootDir)
+      setHistoryStoragePolicy(snapshot.historyStoragePolicy)
+      setStorageLimitEnabledDraft(snapshot.historyStoragePolicy.limitMode === 'limited' && !!snapshot.historyStoragePolicy.limitBytes)
       setConfigReady(true)
     }).catch(() => {
       if (!cancelled)
@@ -337,8 +347,21 @@ export default function App() {
       currentUpscaleProviderId,
       theme,
       historyRootDir,
+      historyStoragePolicy,
     })
-  }, [configReady, providers, currentProviderId, upscaleProviders, currentUpscaleProviderId, theme, historyRootDir])
+  }, [configReady, providers, currentProviderId, upscaleProviders, currentUpscaleProviderId, theme, historyRootDir, historyStoragePolicy])
+
+  useEffect(() => {
+    const limitBytes = historyStoragePolicy.limitBytes
+    const enabled = historyStoragePolicy.limitMode === 'limited' && !!limitBytes
+    setStorageLimitEnabledDraft(enabled)
+    if (!enabled)
+      return
+
+    const nextDraft = getStorageLimitDraft(limitBytes)
+    setStorageLimitDraft(nextDraft.value)
+    setStorageLimitUnit(nextDraft.unit)
+  }, [historyStoragePolicy])
 
   useEffect(() => {
     if (currentUpscaleProviderId && upscaleProviders.some(provider => provider.id === currentUpscaleProviderId))
@@ -495,6 +518,89 @@ export default function App() {
     if (toastTimerRef.current)
       window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2500)
+  }
+
+  function getStorageUnitSize(unit: StorageLimitUnit) {
+    return unit === 'GB' ? 1024 * 1024 * 1024 : 1024 * 1024
+  }
+
+  function formatStorageLimitValue(value: number) {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '')
+  }
+
+  function getStorageLimitDraft(limitBytes: number): { value: string; unit: StorageLimitUnit } {
+    const gb = 1024 * 1024 * 1024
+    if (limitBytes >= gb)
+      return { value: formatStorageLimitValue(limitBytes / gb), unit: 'GB' }
+
+    return { value: formatStorageLimitValue(limitBytes / 1024 / 1024), unit: 'MB' }
+  }
+
+  function getStorageLimitBytesFromDraft() {
+    const value = Number(storageLimitDraft)
+    if (!Number.isFinite(value) || value <= 0)
+      return null
+
+    return Math.round(value * getStorageUnitSize(storageLimitUnit))
+  }
+
+  function getStorageLimitLabel(policy = historyStoragePolicy) {
+    if (policy.limitMode !== 'limited' || !policy.limitBytes)
+      return '无限制'
+
+    return formatSize(policy.limitBytes)
+  }
+
+  async function applyStorageCleanup(policy: HistoryStoragePolicy, notify: boolean) {
+    const result = await enforceStorageLimit(policy)
+    setStorageUsed(result.remainingBytes)
+
+    if (!notify)
+      return result
+
+    if (result.limitReached) {
+      showToast(result.deletedCount > 0
+        ? `已清理 ${result.deletedCount} 条旧记录，但收藏记录仍超过当前上限`
+        : '收藏记录已超过当前上限，请提高上限或手动整理收藏', 'error')
+    }
+    else if (result.deletedCount > 0) {
+      showToast(`已自动清理 ${result.deletedCount} 条旧记录，释放 ${formatSize(result.freedBytes)}`, 'success')
+    }
+
+    return result
+  }
+
+  async function saveHistoryStoragePolicy() {
+    const nextPolicy: HistoryStoragePolicy = storageLimitEnabledDraft
+      ? {
+          limitMode: 'limited',
+          limitBytes: getStorageLimitBytesFromDraft(),
+        }
+      : DEFAULT_HISTORY_STORAGE_POLICY
+
+    if (nextPolicy.limitMode === 'limited' && !nextPolicy.limitBytes) {
+      showToast('请填写有效的存储上限', 'error')
+      return
+    }
+
+    setStoragePolicyPending(true)
+    try {
+      setHistoryStoragePolicy(nextPolicy)
+      const cleanupResult = nextPolicy.limitMode === 'limited'
+        ? await applyStorageCleanup(nextPolicy, true)
+        : null
+      if (nextPolicy.limitMode === 'limited')
+        await refreshHistory()
+      if (nextPolicy.limitMode !== 'limited') {
+        showToast('历史存储已改为无限制', 'success')
+      }
+      else if (!cleanupResult?.deletedCount && !cleanupResult?.limitReached) {
+        showToast(`历史存储上限已设置为 ${getStorageLimitLabel(nextPolicy)}`, 'success')
+      }
+    }
+    finally {
+      setStoragePolicyPending(false)
+    }
   }
 
   function isFileDrag(event: globalThis.DragEvent) {
@@ -1566,7 +1672,7 @@ export default function App() {
     })
     setActiveHistoryRecordId(recordId || null)
 
-    await enforceStorageLimit()
+    await applyStorageCleanup(historyStoragePolicy, true)
     await refreshHistory()
     return recordId || null
   }
@@ -1703,7 +1809,7 @@ export default function App() {
       const targetRecordId = options.recordId ?? activeHistoryRecordId
       if (targetRecordId !== null)
         await saveHistoryUpscaleVariant(targetRecordId, index, selectedFactor, out.imageBase64, out.localPath)
-      await enforceStorageLimit()
+      await applyStorageCleanup(historyStoragePolicy, true)
       await refreshHistory()
       showToast(`${options.auto ? '已自动超分至' : '已放大至'} ${out.width} × ${out.height}`, 'success')
     }
@@ -1882,7 +1988,7 @@ export default function App() {
       })
       if (recordId !== null)
         await saveHistoryUpscaleVariant(recordId, 0, standaloneUpscale.factor, out.imageBase64, out.localPath)
-      await enforceStorageLimit()
+      await applyStorageCleanup(historyStoragePolicy, true)
       await refreshHistory()
       setStandaloneUpscale(current => ({
         ...current,
@@ -2871,6 +2977,8 @@ export default function App() {
   }
 
   function renderSettingsView() {
+    const storageLimitEnabled = storageLimitEnabledDraft
+    const storageLimitBytes = getStorageLimitBytesFromDraft()
     return (
       <div className="settings-view">
         <section className="panel settings-overview-panel">
@@ -3023,8 +3131,49 @@ export default function App() {
             <div className="storage-setting-path">{historyRootDir || '未设置时将使用应用默认目录'}</div>
             <div className="storage-setting-meta">
               <span>当前已用：{formatSize(storageUsed)}</span>
-              <span>上限：1024 MB</span>
+              <span>上限：{getStorageLimitLabel()}</span>
               <span>{historyRootDir ? '后续新记录会落入当前目录' : '当前仍使用应用默认目录'}</span>
+            </div>
+            <div className="storage-limit-box">
+              <label className="storage-limit-toggle">
+                <input
+                  type="checkbox"
+                  checked={storageLimitEnabled}
+                  disabled={storagePolicyPending}
+                  onChange={event => setStorageLimitEnabledDraft(event.target.checked)}
+                />
+                <span>启用历史存储上限</span>
+              </label>
+              <div className="storage-limit-controls">
+                <input
+                  type="number"
+                  min="1"
+                  step="0.1"
+                  value={storageLimitDraft}
+                  disabled={!storageLimitEnabled || storagePolicyPending}
+                  onChange={event => setStorageLimitDraft(event.target.value)}
+                />
+                <select
+                  value={storageLimitUnit}
+                  disabled={!storageLimitEnabled || storagePolicyPending}
+                  onChange={event => setStorageLimitUnit(event.target.value as StorageLimitUnit)}
+                >
+                  <option value="GB">GB</option>
+                  <option value="MB">MB</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={storagePolicyPending || (storageLimitEnabled && !storageLimitBytes)}
+                  onClick={() => void saveHistoryStoragePolicy()}
+                >
+                  {storagePolicyPending ? '保存中...' : '保存设置'}
+                </button>
+              </div>
+              <div className="storage-limit-hint">
+                {storageLimitEnabled
+                  ? '超出上限后会自动清理最旧的未收藏记录，收藏记录默认保留。'
+                  : '默认无限制，不会自动删除历史记录。'}
+              </div>
             </div>
           </div>
         </section>
@@ -3136,7 +3285,7 @@ export default function App() {
                     historyFavoriteFilter={historyFavoriteFilter}
                     historyModeFilter={historyModeFilter}
                     storageUsed={storageUsed}
-                    maxStorage={MAX_STORAGE}
+                    storagePolicy={historyStoragePolicy}
                     onHistorySearchChange={setHistorySearch}
                     onHistoryModelFilterChange={setHistoryModelFilter}
                     onHistoryFavoriteFilterChange={setHistoryFavoriteFilter}

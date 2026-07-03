@@ -2541,6 +2541,105 @@ button:disabled {
   font-size: 12px;
 }
 
+.storage-limit-box {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel-solid) 86%, var(--input-bg));
+}
+
+.storage-limit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.storage-limit-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.storage-limit-controls {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(124px, 144px) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.storage-limit-controls input,
+.storage-limit-controls select {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background-color: var(--input-bg);
+  color: var(--text);
+  line-height: 40px;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.storage-limit-controls input[type='number'] {
+  appearance: textfield;
+}
+
+.storage-limit-controls input[type='number']::-webkit-outer-spin-button,
+.storage-limit-controls input[type='number']::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.storage-limit-controls select {
+  min-width: 124px;
+  padding-right: 42px;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position:
+    calc(100% - 20px) 17px,
+    calc(100% - 14px) 17px;
+  background-repeat: no-repeat;
+  background-size: 6px 6px;
+}
+
+.storage-limit-controls input:hover:not(:disabled),
+.storage-limit-controls select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background-color: color-mix(in srgb, var(--accent) 6%, var(--input-bg));
+}
+
+.storage-limit-controls input:focus,
+.storage-limit-controls select:focus {
+  border-color: var(--accent);
+  background-color: var(--input-bg);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+[data-theme='dark'] .storage-limit-controls input:focus,
+[data-theme='dark'] .storage-limit-controls select:focus {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.storage-limit-controls input:disabled,
+.storage-limit-controls select:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.storage-limit-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .storage-bar-info {
   display: flex;
   justify-content: space-between;
@@ -3777,6 +3876,7 @@ input.input-error {
   .target-size-head,
   .target-input-grid,
   .target-input-grid.compact,
+  .storage-limit-controls,
   .dimension-preset-grid {
     grid-template-columns: 1fr;
     align-items: stretch;

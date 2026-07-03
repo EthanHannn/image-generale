@@ -6,7 +6,26 @@ export const UPSCALE_KEY = 'img-tool-upscale'
 const DB_NAME = 'ImageGenHistoryDB'
 const DB_VERSION = 2
 const STORE_NAME = 'records'
-export const MAX_STORAGE = 1024 * 1024 * 1024
+
+export type HistoryStorageLimitMode = 'unlimited' | 'limited'
+
+export type HistoryStoragePolicy = {
+  limitMode: HistoryStorageLimitMode
+  limitBytes: number | null
+}
+
+export type StorageCleanupResult = {
+  deletedCount: number
+  freedBytes: number
+  remainingBytes: number
+  limitReached: boolean
+}
+
+export const DEFAULT_HISTORY_STORAGE_LIMIT_BYTES = 10 * 1024 * 1024 * 1024
+export const DEFAULT_HISTORY_STORAGE_POLICY: HistoryStoragePolicy = {
+  limitMode: 'unlimited',
+  limitBytes: null,
+}
 
 export type ProviderConfig = {
   id: string
@@ -113,6 +132,7 @@ export type AppConfigSnapshot = DbConfig & {
   currentUpscaleProviderId: string
   theme: ThemeName
   historyRootDir: string
+  historyStoragePolicy: HistoryStoragePolicy
 }
 
 // UI 层使用的平铺表单状态，两套供应商字段同时保留，切换不清空
@@ -234,6 +254,24 @@ function normalizeUpscaleStore(raw: unknown, fallbackConfig?: UpscaleConfig) {
   }
 
   return DEFAULT_UPSCALE_STORE
+}
+
+function normalizeHistoryStoragePolicy(raw: unknown): HistoryStoragePolicy {
+  if (typeof raw !== 'object' || raw === null)
+    return DEFAULT_HISTORY_STORAGE_POLICY
+
+  const obj = raw as Record<string, unknown>
+  if (obj.limitMode !== 'limited')
+    return DEFAULT_HISTORY_STORAGE_POLICY
+
+  const limitBytes = typeof obj.limitBytes === 'number' ? obj.limitBytes : Number(obj.limitBytes)
+  if (!Number.isFinite(limitBytes) || limitBytes <= 0)
+    return DEFAULT_HISTORY_STORAGE_POLICY
+
+  return {
+    limitMode: 'limited',
+    limitBytes: Math.round(limitBytes),
+  }
 }
 
 export function isDesktopApp() {
@@ -402,6 +440,7 @@ function normalizeSnapshot(raw: Partial<AppConfigSnapshot> & { apiUrl?: string; 
     upscaleProviders: upscaleStore.providers,
     currentUpscaleProviderId: upscaleStore.currentProviderId,
     historyRootDir: raw.historyRootDir || '',
+    historyStoragePolicy: normalizeHistoryStoragePolicy(raw.historyStoragePolicy),
     theme: raw.theme === 'light' || raw.theme === 'dark'
       ? raw.theme
       : (loadThemeFromLocalStorage() || 'dark'),
@@ -625,25 +664,59 @@ export async function getTotalSize() {
   return records.reduce((sum, item) => sum + (item.totalSize || 0), 0)
 }
 
-export async function enforceStorageLimit() {
-  if (isDesktopApp()) {
-    await invokeDesktop('enforce_history_storage_limit', { maxStorage: MAX_STORAGE })
-    return
+export async function enforceStorageLimit(policy: HistoryStoragePolicy): Promise<StorageCleanupResult> {
+  const normalizedPolicy = normalizeHistoryStoragePolicy(policy)
+  const total = await getTotalSize()
+  if (normalizedPolicy.limitMode !== 'limited' || !normalizedPolicy.limitBytes) {
+    return {
+      deletedCount: 0,
+      freedBytes: 0,
+      remainingBytes: total,
+      limitReached: false,
+    }
   }
 
-  let total = await getTotalSize()
-  if (total <= MAX_STORAGE)
-    return
+  const maxStorage = normalizedPolicy.limitBytes
+  if (isDesktopApp()) {
+    const result = await invokeDesktop<StorageCleanupResult>('enforce_history_storage_limit', { maxStorage })
+    return result || {
+      deletedCount: 0,
+      freedBytes: 0,
+      remainingBytes: await getTotalSize(),
+      limitReached: false,
+    }
+  }
+
+  let currentTotal = total
+  let deletedCount = 0
+  let freedBytes = 0
+  if (currentTotal <= maxStorage) {
+    return {
+      deletedCount,
+      freedBytes,
+      remainingBytes: currentTotal,
+      limitReached: false,
+    }
+  }
 
   const records = await getRecordsAsc()
   for (const record of records) {
-    if (total <= MAX_STORAGE)
+    if (currentTotal <= maxStorage)
       break
     if (record.isFavorite)
       continue
     if (record.id !== undefined)
       await deleteRecord(record.id)
-    total -= record.totalSize || 0
+    deletedCount += 1
+    freedBytes += record.totalSize || 0
+    currentTotal -= record.totalSize || 0
+  }
+
+  return {
+    deletedCount,
+    freedBytes,
+    remainingBytes: Math.max(currentTotal, 0),
+    limitReached: currentTotal > maxStorage,
   }
 }
 

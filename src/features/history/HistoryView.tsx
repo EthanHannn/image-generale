@@ -1,5 +1,5 @@
 import { formatSize } from '../../lib/utils'
-import type { HistoryRecord } from '../../lib/storage'
+import type { HistoryRecord, HistoryStoragePolicy } from '../../lib/storage'
 import { HistoryList } from './HistoryList'
 import { HistoryToolbar } from './HistoryToolbar'
 
@@ -10,7 +10,7 @@ type HistoryViewProps = {
   historyFavoriteFilter: 'all' | 'favorites'
   historyModeFilter: 'all' | 'gen' | 'edit' | 'upscale'
   storageUsed: number
-  maxStorage: number
+  storagePolicy: HistoryStoragePolicy
   onHistorySearchChange: (value: string) => void
   onHistoryModelFilterChange: (value: string) => void
   onHistoryFavoriteFilterChange: (value: 'all' | 'favorites') => void
@@ -31,7 +31,7 @@ export function HistoryView(props: HistoryViewProps) {
     historyFavoriteFilter,
     historyModeFilter,
     storageUsed,
-    maxStorage,
+    storagePolicy,
     onHistorySearchChange,
     onHistoryModelFilterChange,
     onHistoryFavoriteFilterChange,
@@ -44,7 +44,8 @@ export function HistoryView(props: HistoryViewProps) {
     onShowToast,
   } = props
 
-  const storagePercent = Math.min((storageUsed / maxStorage) * 100, 100)
+  const hasStorageLimit = storagePolicy.limitMode === 'limited' && !!storagePolicy.limitBytes
+  const storagePercent = hasStorageLimit ? Math.min((storageUsed / storagePolicy.limitBytes!) * 100, 100) : 0
   const modelFilterOptions = [...new Set(historyRecords.map(record => record.modelId))].sort()
   const favoriteCount = historyRecords.filter(record => record.isFavorite).length
   const filteredHistory = historyRecords.filter((record) => {
@@ -72,12 +73,20 @@ export function HistoryView(props: HistoryViewProps) {
         </div>
         <div className="storage-bar-wrap">
           <div className="storage-bar-info">
-            <span className="storage-used">已用 {formatSize(storageUsed)} / 1024 MB</span>
-            <span>{storagePercent.toFixed(1)}%</span>
+            <span className="storage-used">
+              {hasStorageLimit
+                ? `已用 ${formatSize(storageUsed)} / ${formatSize(storagePolicy.limitBytes!)}`
+                : `已用 ${formatSize(storageUsed)} · 未设置上限`}
+            </span>
+            {hasStorageLimit ? <span>{storagePercent.toFixed(1)}%</span> : <span>无限制</span>}
           </div>
-          <div className="storage-bar-track">
-            <div className={`storage-bar-fill ${storagePercent > 95 ? 'danger' : storagePercent > 80 ? 'warn' : ''}`} style={{ width: `${storagePercent}%` }} />
-          </div>
+          {hasStorageLimit
+            ? (
+                <div className="storage-bar-track">
+                  <div className={`storage-bar-fill ${storagePercent > 95 ? 'danger' : storagePercent > 80 ? 'warn' : ''}`} style={{ width: `${storagePercent}%` }} />
+                </div>
+              )
+            : null}
         </div>
         <div className="history-overview-grid">
           <div className="history-overview-card">
@@ -97,8 +106,12 @@ export function HistoryView(props: HistoryViewProps) {
           </div>
           <div className="history-overview-card">
             <span className="history-overview-label">存储占用</span>
-            <strong>{storagePercent.toFixed(1)}%</strong>
-            <span className="history-overview-copy">当前使用 {formatSize(storageUsed)}，接近上限时会触发自动清理策略。</span>
+            <strong>{hasStorageLimit ? `${storagePercent.toFixed(1)}%` : formatSize(storageUsed)}</strong>
+            <span className="history-overview-copy">
+              {hasStorageLimit
+                ? `当前上限 ${formatSize(storagePolicy.limitBytes!)}，接近上限时会自动清理最旧未收藏记录。`
+                : '当前未设置上限，历史记录不会被自动清理。'}
+            </span>
           </div>
         </div>
         <HistoryToolbar

@@ -100,6 +100,22 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct HistoryStoragePolicy {
+    limit_mode: String,
+    limit_bytes: Option<i64>,
+}
+
+impl Default for HistoryStoragePolicy {
+    fn default() -> Self {
+        Self {
+            limit_mode: String::from("unlimited"),
+            limit_bytes: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AppConfig {
     providers: Vec<ProviderConfig>,
     current_provider_id: String,
@@ -111,6 +127,8 @@ struct AppConfig {
     current_upscale_provider_id: String,
     theme: String,
     history_root_dir: String,
+    #[serde(default)]
+    history_storage_policy: HistoryStoragePolicy,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +136,15 @@ struct AppConfig {
 struct SaveImageFileResult {
     status: String,
     path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageCleanupResult {
+    deleted_count: i64,
+    freed_bytes: i64,
+    remaining_bytes: i64,
+    limit_reached: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +212,7 @@ impl Default for AppConfig {
             current_upscale_provider_id: String::new(),
             theme: String::from("dark"),
             history_root_dir: String::new(),
+            history_storage_policy: HistoryStoragePolicy::default(),
         }
     }
 }
@@ -817,12 +845,22 @@ fn get_history_storage_usage(app: AppHandle) -> Result<i64, String> {
 }
 
 #[tauri::command]
-fn enforce_history_storage_limit(app: AppHandle, max_storage: i64) -> Result<(), String> {
+fn enforce_history_storage_limit(
+    app: AppHandle,
+    max_storage: i64,
+) -> Result<StorageCleanupResult, String> {
     let mut total = get_history_storage_usage(app.clone())?;
     if total <= max_storage {
-        return Ok(());
+        return Ok(StorageCleanupResult {
+            deleted_count: 0,
+            freed_bytes: 0,
+            remaining_bytes: total,
+            limit_reached: false,
+        });
     }
 
+    let original_total = total;
+    let mut deleted_count = 0;
     let connection = open_history_db(&app)?;
     let mut statement = connection
         .prepare(
@@ -839,10 +877,16 @@ fn enforce_history_storage_limit(app: AppHandle, max_storage: i64) -> Result<(),
             break;
         }
         delete_history_record(app.clone(), id)?;
+        deleted_count += 1;
         total = get_history_storage_usage(app.clone())?;
     }
 
-    Ok(())
+    Ok(StorageCleanupResult {
+        deleted_count,
+        freed_bytes: (original_total - total).max(0),
+        remaining_bytes: total,
+        limit_reached: total > max_storage,
+    })
 }
 
 // ===================== 阿里云超分 =====================
