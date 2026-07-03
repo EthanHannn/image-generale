@@ -222,8 +222,21 @@ button {
 }
 
 .shell-nav-icon {
-  font-size: 18px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  transition: color 0.15s ease, opacity 0.15s ease, filter 0.18s ease;
+}
+
+.shell-nav-item:hover:not(:disabled) .shell-nav-icon {
+  opacity: 0.92;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 18%, transparent));
+}
+
+.shell-nav-item.active .shell-nav-icon {
+  opacity: 1;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 24%, transparent));
 }
 
 .sidebar-footer {
@@ -246,6 +259,15 @@ button {
   background: transparent;
   color: var(--text-secondary);
   font-size: 16px;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.18s ease;
+}
+
+.theme-toggle-icon:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent);
+  transform: none;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .shell-main {
@@ -1619,6 +1641,9 @@ button:disabled {
 }
 
 .tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 8px;
   border-radius: 999px;
   background: var(--input-bg);
@@ -1633,6 +1658,10 @@ button:disabled {
 }
 
 .mode-switch label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   flex: 1;
   margin: 0;
   padding: 10px 14px;
@@ -1664,7 +1693,9 @@ button:disabled {
 }
 
 .upload-icon {
-  font-size: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
 }
 
 .upload-text {
@@ -1701,11 +1732,14 @@ button:disabled {
   position: absolute;
   top: -4px;
   right: -4px;
+  display: grid;
+  place-items: center;
   width: 20px;
   height: 20px;
   padding: 0;
   border-radius: 999px;
   background: var(--err);
+  color: #fff;
 }
 
 .ref-name {
@@ -2089,8 +2123,6 @@ button:disabled {
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 18%, var(--panel-solid));
   color: var(--accent);
-  font-size: 26px;
-  font-weight: 800;
 }
 
 .global-drop-panel strong {
@@ -2146,6 +2178,11 @@ button:disabled {
   background: color-mix(in srgb, #f59e0b 8%, var(--panel-solid));
   color: color-mix(in srgb, #f59e0b 84%, var(--text));
   box-shadow: none;
+}
+
+.favorite-btn svg,
+.favorite-icon-btn svg {
+  flex: 0 0 auto;
 }
 
 .favorite-btn:hover:not(:disabled),
@@ -2238,8 +2275,6 @@ button:disabled {
   border-radius: 10px;
   background: var(--panel);
   color: var(--accent);
-  font-size: 24px;
-  font-weight: 800;
 }
 
 .standalone-info-grid {
@@ -2529,8 +2564,12 @@ button:disabled {
 }
 
 .empty-icon {
-  font-size: 42px;
-  margin-bottom: 8px;
+  display: inline-grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 8px;
+  color: var(--accent);
 }
 
 .empty-text {
@@ -3001,8 +3040,6 @@ button:disabled {
   border-color: var(--border);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 15px;
-  line-height: 1;
   box-shadow: none;
 }
 
@@ -3237,8 +3274,6 @@ button:disabled {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
-  font-size: 38px;
-  line-height: 1;
   transform: translateY(-50%);
 }
 
@@ -3311,11 +3346,14 @@ pre {
   position: absolute;
   top: 24px;
   right: 24px;
+  display: grid;
+  place-items: center;
   width: 42px;
   height: 42px;
   padding: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.12);
+  color: #fff;
   z-index: 2;
 }
 
@@ -3760,8 +3798,9 @@ input.input-error {
   margin-right: auto;
   font-size: 11px;
   color: var(--ok);
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  gap: 5px;
 }
 
 @media (max-width: 980px) {

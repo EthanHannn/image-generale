@@ -1,6 +1,7 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
+import { Icon, type IconName } from './components/Icon'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -1496,7 +1497,7 @@ export default function App() {
     setResultTimer('')
     const startAt = Date.now()
     timerRef.current = window.setInterval(() => {
-      setResultTimer(`⏱ ${((Date.now() - startAt) / 1000).toFixed(1)}s`)
+      setResultTimer(`${((Date.now() - startAt) / 1000).toFixed(1)}s`)
     }, 100)
 
     try {
@@ -1559,7 +1560,7 @@ export default function App() {
         window.clearInterval(timerRef.current)
         timerRef.current = null
       }
-      setResultTimer(`⏱ ${duration}s`)
+      setResultTimer(`${duration}s`)
       setLoadingCount(0)
 
       if (controller.signal.aborted) {
@@ -2239,11 +2240,11 @@ export default function App() {
     )
   }
 
-  const navItems: Array<{ id: ViewName; label: string; icon: string; hint: string }> = [
-    { id: 'workspace', label: '工作台', icon: '◈', hint: '生成与结果' },
-    { id: 'upscale', label: '超分', icon: '◇', hint: '独立放大' },
-    { id: 'history', label: '历史记录', icon: '◎', hint: '资产浏览' },
-    { id: 'settings', label: '设置', icon: '◌', hint: '系统与配置' },
+  const navItems: Array<{ id: ViewName; label: string; icon: IconName; hint: string }> = [
+    { id: 'workspace', label: '工作台', icon: 'navWorkspace', hint: '生成与结果' },
+    { id: 'upscale', label: '超分', icon: 'navUpscale', hint: '独立放大' },
+    { id: 'history', label: '历史记录', icon: 'navHistory', hint: '资产浏览' },
+    { id: 'settings', label: '设置', icon: 'navSettings', hint: '系统与配置' },
   ]
   const viewTitle = view === 'workspace' ? '工作台' : view === 'upscale' ? '超分' : view === 'history' ? '历史记录' : '设置'
   const viewDesc = view === 'workspace'
@@ -2289,7 +2290,7 @@ export default function App() {
               {!models.length
                 ? (
                     <div className="empty compact-empty">
-                      <div className="empty-icon">📦</div>
+                      <div className="empty-icon"><Icon name="box" size={32} /></div>
                       <div className="empty-text">暂无模型</div>
                       <div className="empty-hint">填写 API 配置后点击"拉模型"</div>
                     </div>
@@ -2310,8 +2311,8 @@ export default function App() {
                       {model.creditPerImage !== undefined
                         ? (
                             <div className="tags">
-                              <span className="tag">📝 {model.maxGenerations}张/次</span>
-                              <span className="tag">📎 {model.maxInputImages}张参考图</span>
+                              <span className="tag"><Icon name="prompt" size={13} />{model.maxGenerations}张/次</span>
+                              <span className="tag"><Icon name="image" size={13} />{model.maxInputImages}张参考图</span>
                             </div>
                           )
                         : null}
@@ -2334,11 +2335,13 @@ export default function App() {
             <div className="mode-switch">
               <label className={mode === 'gen' ? 'active' : ''}>
                 <input type="radio" checked={mode === 'gen'} onChange={() => setMode('gen')} />
-                ✨ 文生图
+                <Icon name="spark" size={15} />
+                文生图
               </label>
               <label className={mode === 'edit' ? 'active' : ''}>
                 <input type="radio" checked={mode === 'edit'} onChange={() => setMode('edit')} />
-                🖼 图生图
+                <Icon name="editImage" size={15} />
+                图生图
               </label>
             </div>
 
@@ -2350,7 +2353,7 @@ export default function App() {
                       <span className="accent-inline">（上限: {currentModel?.maxInputImages || 0} 张）</span>
                     </label>
                     <button className="upload-zone" type="button" onClick={() => fileInputRef.current?.click()}>
-                      <div className="upload-icon">📎</div>
+                      <div className="upload-icon"><Icon name="upload" size={24} /></div>
                       <div className="upload-text">点击上传参考图</div>
                       <div className="upload-hint">支持多选 · JPG / PNG / WebP</div>
                     </button>
@@ -2359,7 +2362,9 @@ export default function App() {
                       {refFiles.map((file, index) => (
                         <div key={`${file.name}_${index}`} className="ref-item">
                           <img src={URL.createObjectURL(file)} alt={file.name} />
-                          <button className="ref-remove" type="button" onClick={() => removeRefFile(index)}>✕</button>
+                          <button className="ref-remove" type="button" onClick={() => removeRefFile(index)} aria-label="移除参考图">
+                            <Icon name="close" size={12} />
+                          </button>
                           <div className="ref-name">{file.name}</div>
                         </div>
                       ))}
@@ -2587,7 +2592,7 @@ export default function App() {
                           <span className="btn-spinner" />
                           <span>
                             生成中
-                            {resultTimer ? ` ${resultTimer.replace('⏱ ', '')}` : ''}
+                            {resultTimer ? ` ${resultTimer}` : ''}
                           </span>
                         </>
                       )
@@ -2628,7 +2633,7 @@ export default function App() {
                           void toggleHistoryFavorite(activeHistoryRecord.id, !activeHistoryRecord.isFavorite)
                       }}
                     >
-                      <span aria-hidden="true">{activeHistoryRecord?.isFavorite ? '★' : '☆'}</span>
+                      <Icon name={activeHistoryRecord?.isFavorite ? 'starFilled' : 'star'} size={16} />
                       {activeFavoritePending ? '保存中...' : activeHistoryRecord?.isFavorite ? '已收藏' : '收藏本次'}
                     </button>
                   )
@@ -2647,7 +2652,7 @@ export default function App() {
               : !results.length
                   ? (
                       <div className="empty">
-                        <div className="empty-icon">🎨</div>
+                        <div className="empty-icon"><Icon name="palette" size={34} /></div>
                         <div className="empty-text">等待生成</div>
                         <div className="empty-hint">选择模型并填写参数后点击"生成图片"</div>
                       </div>
@@ -2805,7 +2810,7 @@ export default function App() {
               disabled={standaloneUpscale.isProcessing}
               onChange={handleStandaloneFileInput}
             />
-            <span className="standalone-dropzone-icon">⇧</span>
+            <span className="standalone-dropzone-icon"><Icon name="upload" size={24} /></span>
             <strong>{hasSource ? standaloneUpscale.fileName : '点击或拖入图片'}</strong>
             <span>{hasSource ? `${formatSize(standaloneUpscale.fileSize)} · ${standaloneUpscale.mimeType || 'image'}` : '支持 PNG、JPG、WEBP'}</span>
           </label>
@@ -2961,7 +2966,7 @@ export default function App() {
                   void toggleHistoryFavorite(standaloneActiveRecord.id, !standaloneActiveRecord.isFavorite)
               }}
             >
-              <span aria-hidden="true">{standaloneActiveRecord?.isFavorite ? '★' : '☆'}</span>
+              <Icon name={standaloneActiveRecord?.isFavorite ? 'starFilled' : 'star'} size={16} />
               {standaloneFavoritePending ? '保存中...' : standaloneActiveRecord?.isFavorite ? '已收藏' : '收藏记录'}
             </button>
             <span>{standaloneUpscale.activeRecordId ? `历史记录 #${standaloneUpscale.activeRecordId}` : outputUrl ? '结果已生成，历史保存后可收藏' : '完成后会保存到历史记录'}</span>
@@ -3020,7 +3025,7 @@ export default function App() {
           {providers.length === 0
             ? (
                 <div className="empty" style={{ padding: '32px 0' }}>
-                  <div className="empty-icon">🔌</div>
+                  <div className="empty-icon"><Icon name="plug" size={34} /></div>
                   <div className="empty-text">暂无供应商配置</div>
                   <div className="empty-hint">点击右上角"+ 新增供应商"开始配置</div>
                 </div>
@@ -3065,7 +3070,7 @@ export default function App() {
           {!upscaleProviders.length
             ? (
                 <div className="empty" style={{ padding: '32px 0' }}>
-                  <div className="empty-icon">▣</div>
+                  <div className="empty-icon"><Icon name="upscale" size={34} /></div>
                   <div className="empty-text">暂无超分服务配置</div>
                   <div className="empty-hint">点击右上角"+ 新增超分服务"开始配置</div>
                 </div>
@@ -3247,7 +3252,7 @@ export default function App() {
                 title={item.label}
                 onClick={() => setView(item.id)}
               >
-                <span className="shell-nav-icon">{item.icon}</span>
+                <span className="shell-nav-icon"><Icon name={item.icon} size={21} strokeWidth={1.7} /></span>
               </button>
             ))}
           </nav>
@@ -3259,7 +3264,7 @@ export default function App() {
               title={theme === 'dark' ? '切换到浅色' : '切换到深色'}
               onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
             >
-              {theme === 'dark' ? '☀' : '☾'}
+              <Icon name={theme === 'dark' ? 'themeLight' : 'themeDark'} size={19} strokeWidth={1.8} />
             </button>
           </div>
         </aside>
@@ -3308,7 +3313,9 @@ export default function App() {
         ? (
             <div className={`global-drop-overlay ${globalDropTarget.status}`}>
               <div className="global-drop-panel">
-                <div className="global-drop-icon">{globalDropTarget.status === 'ready' ? '⇧' : '!'}</div>
+                <div className="global-drop-icon">
+                  <Icon name={globalDropTarget.status === 'ready' ? 'upload' : 'alert'} size={26} />
+                </div>
                 <strong>{globalDropTarget.title}</strong>
                 <span>{globalDropTarget.hint}</span>
               </div>
@@ -3344,7 +3351,9 @@ export default function App() {
         : null}
 
       <div className={`img-modal ${previewImage ? 'active' : ''}`} onClick={closeImagePreview}>
-        <button className="modal-close" type="button" onClick={closeImagePreview}>✕</button>
+        <button className="modal-close" type="button" onClick={closeImagePreview} aria-label="关闭预览">
+          <Icon name="close" size={20} />
+        </button>
         {previewImage
           ? (
               <div className="preview-dialog" onClick={event => event.stopPropagation()}>
@@ -3508,7 +3517,9 @@ export default function App() {
           <div className="provider-modal-dialog" onClick={event => event.stopPropagation()}>
             <div className="provider-modal-header">
               <h3>{providerModalMode === 'create' ? '新增供应商' : '编辑供应商'}</h3>
-              <button className="provider-modal-close" type="button" onClick={closeProviderModal}>✕</button>
+              <button className="provider-modal-close" type="button" onClick={closeProviderModal} aria-label="关闭弹窗">
+                <Icon name="close" size={16} />
+              </button>
             </div>
             <div className="provider-modal-body">
               <div className="row">
@@ -3566,7 +3577,14 @@ export default function App() {
                   onClick={() => void testConnection()}
                 >
                   {testConnStatus === 'loading' && <span className="btn-spinner test-conn-spinner" />}
-                  {testConnStatus === 'ok' ? '✓ 连接成功' : '测试连接'}
+                  {testConnStatus === 'ok'
+                    ? (
+                        <>
+                          <Icon name="check" size={15} />
+                          连接成功
+                        </>
+                      )
+                    : '测试连接'}
                 </button>
               </div>
               {testConnStatus === 'err' && testConnMessage
@@ -3575,7 +3593,14 @@ export default function App() {
               {renderStatus(connStatus)}
             </div>
             <div className="provider-modal-footer">
-              {autoSaveHint ? <span className="autosave-hint">✓ 已自动保存</span> : null}
+              {autoSaveHint
+                ? (
+                    <span className="autosave-hint">
+                      <Icon name="check" size={14} />
+                      已自动保存
+                    </span>
+                  )
+                : null}
               <button className="secondary" type="button" onClick={closeProviderModal}>取消</button>
               <button type="button" onClick={handleSaveProviderModal}>保存</button>
             </div>
@@ -3588,7 +3613,9 @@ export default function App() {
           <div className="provider-modal-dialog" onClick={event => event.stopPropagation()}>
             <div className="provider-modal-header">
               <h3>{upscaleModalMode === 'create' ? '新增超分服务' : '编辑超分服务'}</h3>
-              <button className="provider-modal-close" type="button" onClick={closeUpscaleModal}>✕</button>
+              <button className="provider-modal-close" type="button" onClick={closeUpscaleModal} aria-label="关闭弹窗">
+                <Icon name="close" size={16} />
+              </button>
             </div>
             <div className="provider-modal-body">
               <div className="row">

@@ -1,4 +1,5 @@
 import type { HistoryRecord } from '../../lib/storage'
+import { Icon } from '../../components/Icon'
 import { HistoryRecordCard } from './HistoryRecordCard'
 
 type HistoryListProps = {
@@ -44,7 +45,7 @@ export function HistoryList(props: HistoryListProps) {
       {!filteredHistory.length
         ? (
             <div className="empty history-empty-state">
-              <div className="empty-icon">📚</div>
+              <div className="empty-icon"><Icon name="history" size={34} /></div>
               <div className="empty-text">{emptyText}</div>
               <div className="empty-hint">{emptyHint}</div>
             </div>

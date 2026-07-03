@@ -5,6 +5,7 @@ import { saveImageFile } from '../../lib/files'
 import { getErrorMessage } from '../../lib/errors'
 import type { HistoryRecord } from '../../lib/storage'
 import { blobToBase64, formatSize, formatTime, sanitizeFilename } from '../../lib/utils'
+import { Icon, type IconName } from '../../components/Icon'
 
 const EMPTY_HISTORY_IMAGES: Blob[] = []
 type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
@@ -181,7 +182,11 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
                 ))}
               </div>
             )
-          : <div className="thumb-placeholder history-thumb-placeholder">{record.mode === 'edit' ? '🖼' : record.mode === 'upscale' ? '⇧' : '✨'}</div>}
+          : (
+              <div className="thumb-placeholder history-thumb-placeholder">
+                <Icon name={getHistoryPlaceholderIcon(record.mode)} size={28} />
+              </div>
+            )}
       </div>
       <div className="card-body history-card-body">
         <div className="history-card-topline">
@@ -195,7 +200,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
               title={record.isFavorite ? '取消收藏' : '收藏记录'}
               onClick={toggleFavorite}
             >
-              {favoritePending ? '...' : record.isFavorite ? '★' : '☆'}
+              {favoritePending ? '...' : <Icon name={record.isFavorite ? 'starFilled' : 'star'} size={15} />}
             </button>
           </div>
           <span className="history-card-timestamp">{formatTime(record.timestamp)}</span>
@@ -222,10 +227,14 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
       {hasPreview
         ? createPortal(
             <div className="history-preview-modal" onClick={() => setPreviewIndex(null)}>
-              <button className="modal-close history-preview-close" type="button" onClick={() => setPreviewIndex(null)}>✕</button>
+              <button className="modal-close history-preview-close" type="button" onClick={() => setPreviewIndex(null)} aria-label="关闭预览">
+                <Icon name="close" size={20} />
+              </button>
               {hasMultipleImages
                 ? (
-                    <button className="history-preview-nav prev" type="button" onClick={showPrevious}>‹</button>
+                    <button className="history-preview-nav prev" type="button" onClick={showPrevious} aria-label="上一张">
+                      <Icon name="chevronLeft" size={30} />
+                    </button>
                   )
                 : null}
               <div className="history-preview-stage" onClick={event => event.stopPropagation()}>
@@ -234,7 +243,9 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
               </div>
               {hasMultipleImages
                 ? (
-                    <button className="history-preview-nav next" type="button" onClick={showNext}>›</button>
+                    <button className="history-preview-nav next" type="button" onClick={showNext} aria-label="下一张">
+                      <Icon name="chevronRight" size={30} />
+                    </button>
                   )
                 : null}
             </div>,
@@ -309,6 +320,14 @@ function getHistoryModeText(mode: HistoryRecord['mode']) {
   if (mode === 'upscale')
     return '单独超分'
   return '文生图'
+}
+
+function getHistoryPlaceholderIcon(mode: HistoryRecord['mode']): IconName {
+  if (mode === 'edit')
+    return 'editImage'
+  if (mode === 'upscale')
+    return 'upscale'
+  return 'spark'
 }
 
 function getHistorySizeLabel(record: HistoryRecord) {
