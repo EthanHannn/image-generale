@@ -2994,10 +2994,15 @@ export default function App() {
             </div>
           </div>
           <div className="settings-overview-grid">
-            <div className="settings-overview-card accent">
+            <div className="settings-overview-card">
               <span className="settings-overview-label">供应商资源</span>
               <strong>{providers.length}</strong>
               <span className="settings-overview-copy">{currentProvider?.name || '当前未选择默认供应商'}</span>
+            </div>
+            <div className="settings-overview-card">
+              <span className="settings-overview-label">图像超分</span>
+              <strong>{upscaleProviders.length}</strong>
+              <span className="settings-overview-copy">{currentUpscaleProvider?.name || '当前未选择超分服务'}</span>
             </div>
             <div className="settings-overview-card">
               <span className="settings-overview-label">历史目录</span>
@@ -3103,12 +3108,6 @@ export default function App() {
                 </div>
               )}
 
-          <div className="settings-summary-list">
-            <div className="settings-summary-row">
-              <span>当前超分服务</span>
-              <strong>{currentUpscaleProvider ? `${currentUpscaleProvider.name} · ${getUpscaleProviderTypeLabel(currentUpscaleProvider.provider)}` : '未选择'}</strong>
-            </div>
-          </div>
         </section>
 
         <section className="panel settings-panel">
