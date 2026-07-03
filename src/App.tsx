@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { ChangeEvent, DragEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
+import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -46,6 +46,15 @@ type ViewName = 'workspace' | 'upscale' | 'history' | 'settings'
 type UpscaleFactor = 1 | 2 | 3 | 4
 type StandaloneUpscaleFactor = 2 | 3 | 4
 type ImageDimensions = { width: number; height: number }
+type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
+type ImageContextMenuTarget =
+  | { type: 'result'; index: number }
+  | { type: 'standalone'; imageBase64: string; filename: string; mimeType: ImageMimeType }
+type ImageContextMenuState = {
+  x: number
+  y: number
+  target: ImageContextMenuTarget
+}
 type ImagePreviewState = {
   image: string
   title: string
@@ -234,6 +243,7 @@ export default function App() {
   const [originalImageSizes, setOriginalImageSizes] = useState<Record<number, ImageDimensions>>({})
   const [downloadedIndex, setDownloadedIndex] = useState<number | null>(null)
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
+  const [imageContextMenu, setImageContextMenu] = useState<ImageContextMenuState | null>(null)
   const [previewImage, setPreviewImage] = useState<ImagePreviewState | null>(null)
   const [previewDragging, setPreviewDragging] = useState(false)
 
@@ -392,6 +402,12 @@ export default function App() {
       if (event.defaultPrevented)
         return
 
+      if (event.key === 'Escape' && imageContextMenu) {
+        event.preventDefault()
+        closeImageContextMenu()
+        return
+      }
+
       const hasHistoryPreview = !!document.querySelector('.history-preview-modal')
 
       if (hasHistoryPreview) {
@@ -433,7 +449,11 @@ export default function App() {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [previewImage, providerModalOpen, upscaleModalOpen, isGenerating])
+  }, [imageContextMenu, previewImage, providerModalOpen, upscaleModalOpen, isGenerating])
+
+  useEffect(() => {
+    closeImageContextMenu()
+  }, [view, results, isGenerating, previewImage])
 
   function focusPromptInput() {
     if (previewImage || providerModalOpen || upscaleModalOpen)
@@ -478,6 +498,33 @@ export default function App() {
     return path.split(/[\\/]/).pop() || fallback
   }
 
+  function makeTimestamp() {
+    return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  }
+
+  function getImageExtension(mimeType: ImageMimeType) {
+    if (mimeType === 'image/jpeg')
+      return 'jpg'
+    if (mimeType === 'image/webp')
+      return 'webp'
+    return 'png'
+  }
+
+  function getStandaloneSourceFilename() {
+    const mimeType = normalizeImageMimeType(standaloneUpscale.mimeType)
+    return `source_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${makeTimestamp()}.${getImageExtension(mimeType)}`
+  }
+
+  function getStandaloneOutputFilename() {
+    return `upscale_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${standaloneUpscale.factor}x_${makeTimestamp()}.png`
+  }
+
+  function normalizeImageMimeType(mimeType: string): ImageMimeType {
+    if (mimeType === 'image/jpeg' || mimeType === 'image/webp')
+      return mimeType
+    return 'image/png'
+  }
+
   function cancelGeneration() {
     abortControllerRef.current?.abort()
   }
@@ -508,6 +555,59 @@ export default function App() {
     setPreviewDragging(false)
     previewPanRef.current = null
     setPreviewImage(null)
+  }
+
+  function closeImageContextMenu() {
+    setImageContextMenu(null)
+  }
+
+  function getBoundedContextMenuPosition(clientX: number, clientY: number) {
+    const menuWidth = 204
+    const menuHeight = 88
+    const margin = 8
+    const x = Math.min(clientX, window.innerWidth - menuWidth - margin)
+    const y = Math.min(clientY, window.innerHeight - menuHeight - margin)
+    return {
+      x: Math.max(margin, x),
+      y: Math.max(margin, y),
+    }
+  }
+
+  function openImageContextMenu(event: MouseEvent, target: ImageContextMenuTarget) {
+    event.preventDefault()
+    event.stopPropagation()
+    const imageBase64 = target.type === 'result' ? getCurrentImageBase64(target.index) : target.imageBase64
+    if (!imageBase64)
+      return
+
+    setImageContextMenu({
+      ...getBoundedContextMenuPosition(event.clientX, event.clientY),
+      target,
+    })
+  }
+
+  function handleContextMenuSave() {
+    const target = imageContextMenu?.target
+    closeImageContextMenu()
+    if (!target)
+      return
+    if (target.type === 'result') {
+      void handleDownload(target.index)
+      return
+    }
+    void saveStandaloneContextImage(target)
+  }
+
+  function handleContextMenuCopy() {
+    const target = imageContextMenu?.target
+    closeImageContextMenu()
+    if (!target)
+      return
+    if (target.type === 'result') {
+      void handleCopy(target.index)
+      return
+    }
+    void copyStandaloneContextImage(target)
   }
 
   function resetPreviewSplit() {
@@ -1310,7 +1410,7 @@ export default function App() {
       showToast('无图片数据可下载', 'error')
       return
     }
-    const filename = `${currentModel?.id || 'image'}_${sanitizeFilename(prompt.trim())}_${index + 1}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`
+    const filename = `${currentModel?.id || 'image'}_${sanitizeFilename(prompt.trim())}_${index + 1}_${makeTimestamp()}.png`
     try {
       const result = await saveImageFile({ imageBase64, filename, mimeType: 'image/png' })
       if (result.status === 'cancelled')
@@ -1335,6 +1435,33 @@ export default function App() {
       await navigator.clipboard.writeText(`data:image/png;base64,${imageBase64}`)
       setCopiedIndex(index)
       window.setTimeout(() => setCopiedIndex(current => current === index ? null : current), 2000)
+      showToast('Base64 已复制到剪贴板', 'success')
+    }
+    catch (error) {
+      showToast(`复制失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
+  async function saveStandaloneContextImage(target: Extract<ImageContextMenuTarget, { type: 'standalone' }>) {
+    try {
+      const result = await saveImageFile({
+        imageBase64: target.imageBase64,
+        filename: target.filename,
+        mimeType: target.mimeType,
+      })
+      if (result.status === 'cancelled')
+        return
+
+      showToast(isDesktopApp() ? `图片已保存：${getSavedFileLabel(result.path, target.filename)}` : `图片已下载：${target.filename}`, 'success')
+    }
+    catch (error) {
+      showToast(`保存失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
+  async function copyStandaloneContextImage(target: Extract<ImageContextMenuTarget, { type: 'standalone' }>) {
+    try {
+      await navigator.clipboard.writeText(`data:${target.mimeType};base64,${target.imageBase64}`)
       showToast('Base64 已复制到剪贴板', 'success')
     }
     catch (error) {
@@ -1617,7 +1744,7 @@ export default function App() {
       showToast('暂无超分结果可下载', 'error')
       return
     }
-    const filename = `upscale_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${standaloneUpscale.factor}x_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`
+    const filename = getStandaloneOutputFilename()
     try {
       const result = await saveImageFile({ imageBase64: standaloneUpscale.outputBase64, filename, mimeType: 'image/png' })
       if (result.status === 'cancelled')
@@ -2279,6 +2406,7 @@ export default function App() {
                                     src={source}
                                     alt={`结果 ${index + 1}`}
                                     loading="lazy"
+                                    onContextMenu={event => openImageContextMenu(event, { type: 'result', index })}
                                     onClick={() => openImagePreview(
                                       source,
                                       `结果 #${index + 1}`,
@@ -2472,6 +2600,12 @@ export default function App() {
                     <img
                       src={sourceUrl}
                       alt="独立超分原图"
+                      onContextMenu={event => openImageContextMenu(event, {
+                        type: 'standalone',
+                        imageBase64: standaloneUpscale.sourceBase64,
+                        filename: getStandaloneSourceFilename(),
+                        mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
+                      })}
                       onClick={() => openImagePreview(
                         sourceUrl,
                         '独立超分',
@@ -2504,6 +2638,12 @@ export default function App() {
                     <img
                       src={outputUrl}
                       alt="独立超分结果"
+                      onContextMenu={event => openImageContextMenu(event, {
+                        type: 'standalone',
+                        imageBase64: standaloneUpscale.outputBase64,
+                        filename: getStandaloneOutputFilename(),
+                        mimeType: 'image/png',
+                      })}
                       onClick={() => openImagePreview(
                         outputUrl,
                         '独立超分',
@@ -2826,15 +2966,43 @@ export default function App() {
                     onClearHistory={clearHistory}
                     onRecallHistory={recallHistory}
                     onRemoveHistory={removeHistory}
-                    onToggleFavorite={toggleHistoryFavorite}
-                    favoritePendingIds={favoritePendingIds}
-                  />
+                  onToggleFavorite={toggleHistoryFavorite}
+                  favoritePendingIds={favoritePendingIds}
+                  onShowToast={showToast}
+                />
                 )
               : null}
             {view === 'settings' ? renderSettingsView() : null}
           </div>
         </main>
       </div>
+
+      {imageContextMenu
+        ? (
+            <div
+              className="image-context-menu-backdrop"
+              onClick={closeImageContextMenu}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                closeImageContextMenu()
+              }}
+            >
+              <div
+                className="image-context-menu"
+                style={{ left: imageContextMenu.x, top: imageContextMenu.y }}
+                onClick={event => event.stopPropagation()}
+                onContextMenu={event => event.preventDefault()}
+              >
+                <button type="button" onClick={handleContextMenuSave}>
+                  <span>图片另存为</span>
+                </button>
+                <button type="button" onClick={handleContextMenuCopy}>
+                  <span>复制 Base64</span>
+                </button>
+              </div>
+            </div>
+          )
+        : null}
 
       <div className={`img-modal ${previewImage ? 'active' : ''}`} onClick={closeImagePreview}>
         <button className="modal-close" type="button" onClick={closeImagePreview}>✕</button>

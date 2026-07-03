@@ -9,6 +9,7 @@ type HistoryListProps = {
   onRemoveHistory: (recordId: number) => void | Promise<void>
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePendingIds: Record<number, boolean>
+  onShowToast: (message: string, type: 'success' | 'error') => void
 }
 
 export function HistoryList(props: HistoryListProps) {
@@ -20,6 +21,7 @@ export function HistoryList(props: HistoryListProps) {
     onRemoveHistory,
     onToggleFavorite,
     favoritePendingIds,
+    onShowToast,
   } = props
   const hasFavoriteRecords = historyRecords.some(record => record.isFavorite)
   const emptyText = historyRecords.length
@@ -55,6 +57,7 @@ export function HistoryList(props: HistoryListProps) {
               onRemoveHistory={onRemoveHistory}
               onToggleFavorite={onToggleFavorite}
               favoritePending={record.id === undefined ? false : !!favoritePendingIds[record.id]}
+              onShowToast={onShowToast}
             />
           ))}
     </div>

@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
+import type { MouseEvent } from 'react'
+import { saveImageFile } from '../../lib/files'
+import { getErrorMessage } from '../../lib/errors'
 import type { HistoryRecord } from '../../lib/storage'
-import { formatSize, formatTime } from '../../lib/utils'
+import { blobToBase64, formatSize, formatTime, sanitizeFilename } from '../../lib/utils'
 
 const EMPTY_HISTORY_IMAGES: Blob[] = []
+type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
+type HistoryContextMenuState = {
+  x: number
+  y: number
+  index: number
+}
 
 type HistoryRecordCardProps = {
   record: HistoryRecord
@@ -11,13 +20,15 @@ type HistoryRecordCardProps = {
   onRemoveHistory: (recordId: number) => void | Promise<void>
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePending: boolean
+  onShowToast: (message: string, type: 'success' | 'error') => void
 }
 
 export function HistoryRecordCard(props: HistoryRecordCardProps) {
-  const { record, onRecallHistory, onRemoveHistory, onToggleFavorite, favoritePending } = props
+  const { record, onRecallHistory, onRemoveHistory, onToggleFavorite, favoritePending, onShowToast } = props
   const displayImages = useMemo(() => getHistoryDisplayImages(record), [record])
   const imageUrls = useObjectUrls(displayImages)
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(null)
   const promptSummary = record.prompt || '(无 Prompt)'
   const modeText = getHistoryModeText(record.mode)
   const sizeLabel = getHistorySizeLabel(record)
@@ -27,10 +38,15 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
   const hasMultipleImages = imageUrls.length > 1
 
   useEffect(() => {
-    if (!hasPreview)
+    if (!hasPreview && !contextMenu)
       return
 
     function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape' && contextMenu) {
+        event.preventDefault()
+        closeContextMenu()
+        return
+      }
       if (event.key === 'Escape') {
         setPreviewIndex(null)
         return
@@ -47,9 +63,10 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [hasPreview, imageUrls.length])
+  }, [contextMenu, hasPreview, imageUrls.length])
 
   function openPreview(index: number) {
+    closeContextMenu()
     setPreviewIndex(index)
   }
 
@@ -70,6 +87,80 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     void onToggleFavorite(record.id, !record.isFavorite)
   }
 
+  function closeContextMenu() {
+    setContextMenu(null)
+  }
+
+  function getBoundedContextMenuPosition(clientX: number, clientY: number) {
+    const menuWidth = 204
+    const menuHeight = 88
+    const margin = 8
+    const x = Math.min(clientX, window.innerWidth - menuWidth - margin)
+    const y = Math.min(clientY, window.innerHeight - menuHeight - margin)
+    return {
+      x: Math.max(margin, x),
+      y: Math.max(margin, y),
+    }
+  }
+
+  function openContextMenu(event: MouseEvent, index: number) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!displayImages[index])
+      return
+
+    setContextMenu({
+      ...getBoundedContextMenuPosition(event.clientX, event.clientY),
+      index,
+    })
+  }
+
+  async function saveContextImage() {
+    const index = contextMenu?.index
+    closeContextMenu()
+    if (index === undefined)
+      return
+
+    const blob = displayImages[index]
+    if (!blob)
+      return
+
+    const mimeType = normalizeImageMimeType(blob.type)
+    const filename = getHistoryImageFilename(record, index, mimeType)
+    try {
+      const imageBase64 = await blobToBase64(blob)
+      const result = await saveImageFile({ imageBase64, filename, mimeType })
+      if (result.status === 'cancelled')
+        return
+
+      onShowToast(`图片已保存：${getSavedFileLabel(result.path, filename)}`, 'success')
+    }
+    catch (error) {
+      onShowToast(`保存失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
+  async function copyContextImage() {
+    const index = contextMenu?.index
+    closeContextMenu()
+    if (index === undefined)
+      return
+
+    const blob = displayImages[index]
+    if (!blob)
+      return
+
+    const mimeType = normalizeImageMimeType(blob.type)
+    try {
+      const imageBase64 = await blobToBase64(blob)
+      await navigator.clipboard.writeText(`data:${mimeType};base64,${imageBase64}`)
+      onShowToast('Base64 已复制到剪贴板', 'success')
+    }
+    catch (error) {
+      onShowToast(`复制失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
   return (
     <div className="history-card">
       <div className="history-thumb-rail">
@@ -82,6 +173,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
                     className="history-thumb-button"
                     type="button"
                     onClick={() => openPreview(index)}
+                    onContextMenu={event => openContextMenu(event, index)}
                   >
                     <img className="thumb history-thumb" src={url} alt={`历史图片 ${index + 1}`} />
                     {index === 3 && imageUrls.length > 4 ? <span className="history-thumb-more">+{imageUrls.length - 4}</span> : null}
@@ -138,7 +230,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
                   )
                 : null}
               <div className="history-preview-stage" onClick={event => event.stopPropagation()}>
-                <img src={previewUrl} alt={`历史预览 ${previewIndex + 1}`} />
+                <img src={previewUrl} alt={`历史预览 ${previewIndex + 1}`} onContextMenu={event => openContextMenu(event, previewIndex)} />
                 <div className="history-preview-count">{previewIndex + 1} / {imageUrls.length}</div>
               </div>
               {hasMultipleImages
@@ -150,8 +242,66 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
             document.body,
           )
         : null}
+      {contextMenu
+        ? createPortal(
+            <div
+              className={`image-context-menu-backdrop ${hasPreview ? 'history-context-menu-backdrop' : ''}`}
+              onClick={closeContextMenu}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                closeContextMenu()
+              }}
+            >
+              <div
+                className="image-context-menu"
+                style={{ left: contextMenu.x, top: contextMenu.y }}
+                onClick={event => event.stopPropagation()}
+                onContextMenu={event => event.preventDefault()}
+              >
+                <button type="button" onClick={() => void saveContextImage()}>
+                  <span>图片另存为</span>
+                </button>
+                <button type="button" onClick={() => void copyContextImage()}>
+                  <span>复制 Base64</span>
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   )
+}
+
+function getSavedFileLabel(path: string | undefined, fallback: string) {
+  if (!path)
+    return fallback
+  return path.split(/[\\/]/).pop() || fallback
+}
+
+function getHistoryImageFilename(record: HistoryRecord, index: number, mimeType: ImageMimeType) {
+  const extension = getImageExtension(mimeType)
+  const recordId = record.id === undefined ? record.timestamp : record.id
+  const label = record.mode === 'upscale' ? 'history_upscale' : 'history'
+  return `${label}_${recordId}_${sanitizeFilename(record.modelId || 'image')}_${index + 1}_${makeTimestamp()}.${extension}`
+}
+
+function getImageExtension(mimeType: ImageMimeType) {
+  if (mimeType === 'image/jpeg')
+    return 'jpg'
+  if (mimeType === 'image/webp')
+    return 'webp'
+  return 'png'
+}
+
+function makeTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+}
+
+function normalizeImageMimeType(mimeType: string): ImageMimeType {
+  if (mimeType === 'image/jpeg' || mimeType === 'image/webp')
+    return mimeType
+  return 'image/png'
 }
 
 function getHistoryModeText(mode: HistoryRecord['mode']) {

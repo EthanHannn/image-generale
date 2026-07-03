@@ -20,6 +20,7 @@ type HistoryViewProps = {
   onRemoveHistory: (recordId: number) => void | Promise<void>
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePendingIds: Record<number, boolean>
+  onShowToast: (message: string, type: 'success' | 'error') => void
 }
 
 export function HistoryView(props: HistoryViewProps) {
@@ -40,6 +41,7 @@ export function HistoryView(props: HistoryViewProps) {
     onRemoveHistory,
     onToggleFavorite,
     favoritePendingIds,
+    onShowToast,
   } = props
 
   const storagePercent = Math.min((storageUsed / maxStorage) * 100, 100)
@@ -120,6 +122,7 @@ export function HistoryView(props: HistoryViewProps) {
           onRemoveHistory={onRemoveHistory}
           onToggleFavorite={onToggleFavorite}
           favoritePendingIds={favoritePendingIds}
+          onShowToast={onShowToast}
         />
       </section>
     </div>
