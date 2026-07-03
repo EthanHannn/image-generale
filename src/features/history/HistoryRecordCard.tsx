@@ -187,25 +187,24 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
         <div className="history-card-topline">
           <div className="history-card-title-row">
             <span className="model-tag">{titleLabel}</span>
-            <span className="history-card-timestamp">{formatTime(record.timestamp)}</span>
+            <button
+              className={`favorite-icon-btn history-favorite-btn ${record.isFavorite ? 'active' : ''}`}
+              type="button"
+              disabled={record.id === undefined || favoritePending}
+              aria-label={record.isFavorite ? '取消收藏' : '收藏记录'}
+              title={record.isFavorite ? '取消收藏' : '收藏记录'}
+              onClick={toggleFavorite}
+            >
+              {favoritePending ? '...' : record.isFavorite ? '★' : '☆'}
+            </button>
           </div>
-          <button
-            className={`favorite-icon-btn history-favorite-btn ${record.isFavorite ? 'active' : ''}`}
-            type="button"
-            disabled={record.id === undefined || favoritePending}
-            aria-label={record.isFavorite ? '取消收藏' : '收藏记录'}
-            title={record.isFavorite ? '取消收藏' : '收藏记录'}
-            onClick={toggleFavorite}
-          >
-            {favoritePending ? '...' : record.isFavorite ? '★' : '☆'}
-          </button>
+          <span className="history-card-timestamp">{formatTime(record.timestamp)}</span>
         </div>
         <div className="history-card-prompt" title={promptSummary}>{promptSummary}</div>
         <div className="history-card-summary">
           <span className={`history-mode-tag ${record.mode === 'edit' ? 'edit' : record.mode === 'upscale' ? 'upscale' : 'gen'}`}>
             {modeText}
           </span>
-          {record.isFavorite ? <span className="history-favorite-tag">收藏</span> : null}
           <span>{record.imageCount} 张图片</span>
           <span>{sizeLabel}</span>
           <span>{record.duration}s</span>

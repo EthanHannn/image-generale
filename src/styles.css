@@ -2982,7 +2982,7 @@ button:disabled {
 .history-card-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -2993,13 +2993,31 @@ button:disabled {
 }
 
 .history-favorite-btn {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   padding: 0;
-  border-radius: 10px;
-  font-size: 17px;
+  border-radius: 8px;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 15px;
   line-height: 1;
+  box-shadow: none;
+}
+
+.history-favorite-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #f59e0b 48%, var(--border));
+  background: color-mix(in srgb, #f59e0b 9%, var(--panel-solid));
+  color: #f59e0b;
+  transform: none;
+  box-shadow: none;
+}
+
+.history-favorite-btn.active {
+  border-color: color-mix(in srgb, #f59e0b 56%, var(--border));
+  background: color-mix(in srgb, #f59e0b 12%, var(--panel-solid));
+  color: #f59e0b;
 }
 
 .card-title {
@@ -3068,13 +3086,6 @@ button:disabled {
   border-color: color-mix(in srgb, #0ea5e9 74%, #fff);
 }
 
-.history-card-summary .history-favorite-tag {
-  background: color-mix(in srgb, #f59e0b 16%, var(--panel-hover));
-  border-color: color-mix(in srgb, #f59e0b 42%, var(--border));
-  color: #fbbf24;
-  font-weight: 700;
-}
-
 .history-card:hover .history-card-summary span {
   background-color: var(--panel-solid);
   border-color: color-mix(in srgb, var(--border) 80%, var(--text-secondary));
@@ -3093,11 +3104,6 @@ button:disabled {
 .history-card:hover .history-card-summary .history-mode-tag.upscale {
   background: color-mix(in srgb, #0ea5e9 78%, #0f172a);
   border-color: color-mix(in srgb, #0ea5e9 84%, #fff);
-}
-
-.history-card:hover .history-card-summary .history-favorite-tag {
-  background: color-mix(in srgb, #f59e0b 20%, var(--panel-solid));
-  border-color: color-mix(in srgb, #f59e0b 50%, var(--border));
 }
 
 .card-meta {
@@ -3870,6 +3876,11 @@ input.input-error {
   .history-card-topline {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .history-card-title-row {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .history-filter-compact,
