@@ -78,8 +78,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "release-files/${{ matrix.platform }}"
+          release_dir="release-files/${{ matrix.platform }}"
+          rm -rf "$release_dir"
+          mkdir -p "$release_dir"
           shopt -s nullglob
+          version="$(node -p "require('./package.json').version")"
+          arch="$(printf '%s' "${RUNNER_ARCH:-X64}" | tr '[:upper:]' '[:lower:]')"
 
           case "${{ matrix.platform }}" in
             windows)
@@ -99,10 +103,36 @@ jobs:
           fi
 
           for file in "${files[@]}"; do
-            cp "$file" "release-files/${{ matrix.platform }}/"
+            case "${{ matrix.platform }}" in
+              windows)
+                if [[ "$file" == *.exe ]]; then
+                  target_name="ImageGenerator-$version-windows-$arch-setup.exe"
+                else
+                  target_name="ImageGenerator-$version-windows-$arch.msi"
+                fi
+                ;;
+              macos)
+                target_name="ImageGenerator-$version-macos-$arch.dmg"
+                ;;
+              linux)
+                case "$file" in
+                  *.AppImage)
+                    target_name="ImageGenerator-$version-linux-$arch.AppImage"
+                    ;;
+                  *.deb)
+                    target_name="ImageGenerator-$version-linux-$arch.deb"
+                    ;;
+                  *.rpm)
+                    target_name="ImageGenerator-$version-linux-$arch.rpm"
+                    ;;
+                esac
+                ;;
+            esac
+
+            cp "$file" "$release_dir/$target_name"
           done
 
-          cd "release-files/${{ matrix.platform }}"
+          cd "$release_dir"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum * > "checksums-${{ matrix.platform }}.txt"
           else
