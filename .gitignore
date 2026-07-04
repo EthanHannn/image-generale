@@ -3,6 +3,7 @@ node_modules/
 
 # 构建产物
 dist/
+release/
 *.tsbuildinfo
 
 # tsc 从 vite.config.ts 编译出的产物（源文件是 .ts）

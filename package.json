@@ -19,6 +19,7 @@
     "desktop:build:linux:appimage": "tauri build --bundles appimage",
     "desktop:build:linux:deb": "tauri build --bundles deb",
     "desktop:build:linux:rpm": "tauri build --bundles rpm",
+    "release:windows": "powershell -ExecutionPolicy Bypass -File scripts/prepare-windows-release.ps1",
     "tauri": "tauri",
     "clean:install": "powershell -ExecutionPolicy Bypass -File scripts/clean-install.ps1"
   },
