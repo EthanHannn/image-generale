@@ -13,6 +13,12 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+      WINDOWS_DIGEST_ALGORITHM: ${{ vars.WINDOWS_DIGEST_ALGORITHM }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,8 +77,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Import Windows signing certificate
+        if: matrix.platform == 'windows' && env.WINDOWS_CERTIFICATE_BASE64 != '' && env.WINDOWS_CERTIFICATE_PASSWORD != ''
+        run: pnpm run signing:windows:import
+
+      - name: Configure Windows signing
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT != ''
+        run: pnpm run signing:windows:configure
+
       - name: Build packages
         run: ${{ matrix.build-command }}
+
+      - name: Verify Windows signatures
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT != ''
+        run: pnpm run signing:windows:verify
 
       - name: Prepare release files
         shell: bash

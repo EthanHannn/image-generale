@@ -1,7 +1,7 @@
 {
   "name": "image-generator-workspace",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -21,6 +21,9 @@
     "desktop:build:linux:rpm": "tauri build --bundles rpm",
     "release:windows": "powershell -ExecutionPolicy Bypass -File scripts/prepare-windows-release.ps1",
     "version:set": "powershell -ExecutionPolicy Bypass -File scripts/set-version.ps1",
+    "signing:windows:import": "powershell -ExecutionPolicy Bypass -File scripts/import-windows-signing-certificate.ps1",
+    "signing:windows:configure": "powershell -ExecutionPolicy Bypass -File scripts/configure-windows-signing.ps1",
+    "signing:windows:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-windows-signature.ps1",
     "tauri": "tauri",
     "clean:install": "powershell -ExecutionPolicy Bypass -File scripts/clean-install.ps1"
   },
