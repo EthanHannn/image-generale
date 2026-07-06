@@ -2229,7 +2229,7 @@ button:disabled {
 
 .result-primary-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2534,6 +2534,18 @@ button:disabled {
 .standalone-preview-empty span {
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.standalone-preview-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.standalone-send-btn {
+  width: 100%;
+  margin-top: 8px;
 }
 
 .crop-margin-layout {

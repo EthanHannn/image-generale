@@ -12,6 +12,10 @@ export type CropMarginSource = {
   height: number
 }
 
+export type CropMarginIncomingImage = Omit<CropMarginSource, 'id'> & {
+  id?: string
+}
+
 export type CropMarginOutput = {
   base64: string
   marginWidth: number

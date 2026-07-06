@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent } from 'react'
 import { Icon } from '../../components/Icon'
 import { saveImageFile } from '../../lib/files'
 import { blobToBase64, formatSize, sanitizeFilename } from '../../lib/utils'
 import { cropMarginTemplates, cropMarginWidthOptions, getCropMarginTemplate, getCropMarginWidthOption } from './cropMarginTemplates'
 import { getCropMarginWidth, renderCropMarginImage } from './cropMarginRenderer'
-import type { CropMarginOutput, CropMarginSource, CropMarginTemplateId, CropMarginWidthLevel } from './types'
+import type { CropMarginIncomingImage, CropMarginOutput, CropMarginSource, CropMarginTemplateId, CropMarginWidthLevel } from './types'
 
 type CropMarginViewProps = {
   onShowToast: (message: string, type: 'success' | 'error') => void
+  incomingImages: CropMarginIncomingImage[]
+  incomingVersion: number
 }
 
 type RenderState =
@@ -17,7 +19,8 @@ type RenderState =
   | { status: 'ready'; output: CropMarginOutput; message: string }
   | { status: 'error'; output: null; message: string }
 
-export function CropMarginView({ onShowToast }: CropMarginViewProps) {
+export function CropMarginView({ onShowToast, incomingImages, incomingVersion }: CropMarginViewProps) {
+  const incomingVersionRef = useRef(0)
   const [sources, setSources] = useState<CropMarginSource[]>([])
   const [activeId, setActiveId] = useState('')
   const [templateId, setTemplateId] = useState<CropMarginTemplateId>('clean')
@@ -57,6 +60,19 @@ export function CropMarginView({ onShowToast }: CropMarginViewProps) {
       cancelled = true
     }
   }, [activeSource, sourceUrl, template, widthOption.ratio])
+
+  useEffect(() => {
+    if (!incomingVersion || incomingVersionRef.current === incomingVersion || !incomingImages.length)
+      return
+
+    incomingVersionRef.current = incomingVersion
+    const nextSources = incomingImages.map(image => ({
+      ...image,
+      id: image.id || makeSourceId(),
+    }))
+    setSources(current => [...nextSources, ...current])
+    setActiveId(nextSources[0]?.id || '')
+  }, [incomingImages, incomingVersion])
 
   useEffect(() => {
     function handleExternalFiles(event: Event) {
@@ -283,7 +299,7 @@ export function CropMarginView({ onShowToast }: CropMarginViewProps) {
 async function readCropMarginSource(file: File): Promise<CropMarginSource> {
   const [base64, dimensions] = await Promise.all([blobToBase64(file), readImageDimensions(file)])
   return {
-    id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    id: makeSourceId(),
     fileName: file.name,
     fileSize: file.size,
     mimeType: file.type || 'image/png',
@@ -291,6 +307,10 @@ async function readCropMarginSource(file: File): Promise<CropMarginSource> {
     width: dimensions.width,
     height: dimensions.height,
   }
+}
+
+function makeSourceId() {
+  return `${Date.now()}_${Math.random().toString(36).slice(2)}`
 }
 
 function readImageDimensions(file: File) {

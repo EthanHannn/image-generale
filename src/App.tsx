@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { Icon, type IconName } from './components/Icon'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
+import type { CropMarginIncomingImage } from './features/crop-margin/types'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -256,6 +257,8 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<ImagePreviewState | null>(null)
   const [previewDragging, setPreviewDragging] = useState(false)
   const [globalDropTarget, setGlobalDropTarget] = useState<GlobalDropTarget | null>(null)
+  const [cropMarginIncomingImages, setCropMarginIncomingImages] = useState<CropMarginIncomingImage[]>([])
+  const [cropMarginIncomingVersion, setCropMarginIncomingVersion] = useState(0)
 
   const [upscaleProviders, setUpscaleProviders] = useState<UpscaleProviderConfig[]>(initialUpscaleStore.providers)
   const [currentUpscaleProviderId, setCurrentUpscaleProviderId] = useState(initialUpscaleStore.currentProviderId)
@@ -1703,6 +1706,82 @@ export default function App() {
     return results[index]?.b64_json || ''
   }
 
+  function openCropMarginWithImages(images: CropMarginIncomingImage[], toastMessage: string) {
+    if (!images.length) {
+      showToast('没有可发送的图片', 'error')
+      return
+    }
+
+    setCropMarginIncomingImages(images)
+    setCropMarginIncomingVersion(current => current + 1)
+    setView('cropMargin')
+    showToast(toastMessage, 'success')
+  }
+
+  async function sendResultToCropMargin(index: number) {
+    const imageBase64 = getCurrentImageBase64(index)
+    if (!imageBase64) {
+      showToast('无图片数据可发送', 'error')
+      return
+    }
+
+    const selectedFactor = selectedUpscaleFactors[index] || 1
+    const dimensions = await readBase64ImageSize(imageBase64).catch(() => parseImageSize(imageSizes[index]))
+    if (!dimensions) {
+      showToast('图片尺寸尚未就绪，请稍候再试', 'error')
+      return
+    }
+
+    const fileName = `result_${index + 1}_${selectedFactor}x.png`
+    openCropMarginWithImages([{
+      id: `workspace_${index}_${selectedFactor}_${Date.now()}`,
+      fileName,
+      fileSize: getBase64ByteLength(imageBase64),
+      mimeType: 'image/png',
+      base64: imageBase64,
+      width: dimensions.width,
+      height: dimensions.height,
+    }], '已发送到裁剪台')
+  }
+
+  function sendStandaloneSourceToCropMargin() {
+    if (!standaloneUpscale.sourceBase64) {
+      showToast('暂无原图可发送', 'error')
+      return
+    }
+
+    openCropMarginWithImages([{
+      id: `standalone_source_${Date.now()}`,
+      fileName: standaloneUpscale.fileName || 'source.png',
+      fileSize: standaloneUpscale.fileSize || getBase64ByteLength(standaloneUpscale.sourceBase64),
+      mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
+      base64: standaloneUpscale.sourceBase64,
+      width: standaloneUpscale.sourceWidth,
+      height: standaloneUpscale.sourceHeight,
+    }], '原图已发送到裁剪台')
+  }
+
+  function sendStandaloneOutputToCropMargin() {
+    if (!standaloneUpscale.outputBase64) {
+      showToast('暂无超分图可发送', 'error')
+      return
+    }
+
+    openCropMarginWithImages([{
+      id: `standalone_output_${standaloneUpscale.factor}_${Date.now()}`,
+      fileName: getStandaloneOutputFilename(),
+      fileSize: getBase64ByteLength(standaloneUpscale.outputBase64),
+      mimeType: 'image/png',
+      base64: standaloneUpscale.outputBase64,
+      width: standaloneUpscale.outputWidth,
+      height: standaloneUpscale.outputHeight,
+    }], '超分图已发送到裁剪台')
+  }
+
+  function sendHistoryImagesToCropMargin(images: CropMarginIncomingImage[]) {
+    openCropMarginWithImages(images, `已发送 ${images.length} 张历史图片到裁剪台`)
+  }
+
   async function handleDownload(index: number) {
     const imageBase64 = getCurrentImageBase64(index)
     if (!imageBase64) {
@@ -2749,6 +2828,9 @@ export default function App() {
                               <button className="dl-btn" type="button" onClick={() => void handleCopy(index)}>
                                 {copiedIndex === index ? '已复制' : '复制 Base64'}
                               </button>
+                              <button className="dl-btn" type="button" onClick={() => void sendResultToCropMargin(index)}>
+                                发送到裁剪台
+                              </button>
                             </div>
                             {image.b64_json
                               ? (
@@ -2889,9 +2971,12 @@ export default function App() {
               <h2>超分预览</h2>
               <div className="panel-caption">{outputUrl ? `输出 ${formatImageDimensions({ width: standaloneUpscale.outputWidth, height: standaloneUpscale.outputHeight })}` : '原图与结果会在这里并排展示。'}</div>
             </div>
-            {outputUrl
-              ? (
-                  <button className="dl-btn" type="button" onClick={() => void downloadStandaloneOutput()}>下载超分图</button>
+              {outputUrl
+                ? (
+                  <div className="standalone-preview-actions">
+                    <button className="dl-btn" type="button" onClick={() => void sendStandaloneOutputToCropMargin()}>发送到裁剪台</button>
+                    <button className="dl-btn" type="button" onClick={() => void downloadStandaloneOutput()}>下载超分图</button>
+                  </div>
                 )
               : null}
           </div>
@@ -2904,28 +2989,33 @@ export default function App() {
               </div>
               {sourceUrl
                 ? (
-                    <img
-                      src={sourceUrl}
-                      alt="独立超分原图"
-                      onContextMenu={event => openImageContextMenu(event, {
-                        type: 'standalone',
-                        imageBase64: standaloneUpscale.sourceBase64,
-                        filename: getStandaloneSourceFilename(),
-                        mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
-                      })}
-                      onClick={() => openImagePreview(
-                        sourceUrl,
-                        '独立超分',
-                        outputUrl
-                          ? {
-                              before: sourceUrl,
-                              after: outputUrl,
-                              beforeLabel: '原图',
-                              afterLabel: `${standaloneUpscale.factor}X 超分图`,
-                            }
-                          : undefined,
-                      )}
-                    />
+                    <>
+                      <img
+                        src={sourceUrl}
+                        alt="独立超分原图"
+                        onContextMenu={event => openImageContextMenu(event, {
+                          type: 'standalone',
+                          imageBase64: standaloneUpscale.sourceBase64,
+                          filename: getStandaloneSourceFilename(),
+                          mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
+                        })}
+                        onClick={() => openImagePreview(
+                          sourceUrl,
+                          '独立超分',
+                          outputUrl
+                            ? {
+                                before: sourceUrl,
+                                after: outputUrl,
+                                beforeLabel: '原图',
+                                afterLabel: `${standaloneUpscale.factor}X 超分图`,
+                              }
+                            : undefined,
+                        )}
+                      />
+                      <button className="history-action-btn standalone-send-btn" type="button" onClick={() => sendStandaloneSourceToCropMargin()}>
+                        发送到裁剪台
+                      </button>
+                    </>
                   )
                 : (
                     <div className="standalone-preview-empty">
@@ -2942,28 +3032,33 @@ export default function App() {
               </div>
               {outputUrl
                 ? (
-                    <img
-                      src={outputUrl}
-                      alt="独立超分结果"
-                      onContextMenu={event => openImageContextMenu(event, {
-                        type: 'standalone',
-                        imageBase64: standaloneUpscale.outputBase64,
-                        filename: getStandaloneOutputFilename(),
-                        mimeType: 'image/png',
-                      })}
-                      onClick={() => openImagePreview(
-                        outputUrl,
-                        '独立超分',
-                        sourceUrl
-                          ? {
-                              before: sourceUrl,
-                              after: outputUrl,
-                              beforeLabel: '原图',
-                              afterLabel: `${standaloneUpscale.factor}X 超分图`,
-                            }
-                          : undefined,
-                      )}
-                    />
+                    <>
+                      <img
+                        src={outputUrl}
+                        alt="独立超分结果"
+                        onContextMenu={event => openImageContextMenu(event, {
+                          type: 'standalone',
+                          imageBase64: standaloneUpscale.outputBase64,
+                          filename: getStandaloneOutputFilename(),
+                          mimeType: 'image/png',
+                        })}
+                        onClick={() => openImagePreview(
+                          outputUrl,
+                          '独立超分',
+                          sourceUrl
+                            ? {
+                                before: sourceUrl,
+                                after: outputUrl,
+                                beforeLabel: '原图',
+                                afterLabel: `${standaloneUpscale.factor}X 超分图`,
+                              }
+                            : undefined,
+                        )}
+                      />
+                      <button className="history-action-btn standalone-send-btn" type="button" onClick={() => sendStandaloneOutputToCropMargin()}>
+                        发送到裁剪台
+                      </button>
+                    </>
                   )
                 : (
                     <div className="standalone-preview-empty">
@@ -3298,7 +3393,15 @@ export default function App() {
           <div className="view-body">
             {view === 'workspace' ? renderWorkspaceView() : null}
             {view === 'upscale' ? renderStandaloneUpscaleView() : null}
-            {view === 'cropMargin' ? <CropMarginView onShowToast={showToast} /> : null}
+            {view === 'cropMargin'
+              ? (
+                  <CropMarginView
+                    incomingImages={cropMarginIncomingImages}
+                    incomingVersion={cropMarginIncomingVersion}
+                    onShowToast={showToast}
+                  />
+                )
+              : null}
             {view === 'history'
               ? (
                   <HistoryView
@@ -3316,10 +3419,11 @@ export default function App() {
                     onClearHistory={clearHistory}
                     onRecallHistory={recallHistory}
                     onRemoveHistory={removeHistory}
-                  onToggleFavorite={toggleHistoryFavorite}
-                  favoritePendingIds={favoritePendingIds}
-                  onShowToast={showToast}
-                />
+                    onToggleFavorite={toggleHistoryFavorite}
+                    favoritePendingIds={favoritePendingIds}
+                    onShowToast={showToast}
+                    onSendToCropMargin={sendHistoryImagesToCropMargin}
+                  />
                 )
               : null}
             {view === 'settings' ? renderSettingsView() : null}

@@ -6,6 +6,7 @@ import { getErrorMessage } from '../../lib/errors'
 import type { HistoryRecord } from '../../lib/storage'
 import { blobToBase64, formatSize, formatTime, sanitizeFilename } from '../../lib/utils'
 import { Icon, type IconName } from '../../components/Icon'
+import type { CropMarginIncomingImage } from '../crop-margin/types'
 
 const EMPTY_HISTORY_IMAGES: Blob[] = []
 type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
@@ -22,11 +23,13 @@ type HistoryRecordCardProps = {
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePending: boolean
   onShowToast: (message: string, type: 'success' | 'error') => void
+  onSendToCropMargin: (images: CropMarginIncomingImage[]) => void
 }
 
 export function HistoryRecordCard(props: HistoryRecordCardProps) {
-  const { record, onRecallHistory, onRemoveHistory, onToggleFavorite, favoritePending, onShowToast } = props
+  const { record, onRecallHistory, onRemoveHistory, onToggleFavorite, favoritePending, onShowToast, onSendToCropMargin } = props
   const displayImages = useMemo(() => getHistoryDisplayImages(record), [record])
+  const cropMarginImages = useMemo(() => getHistoryCropMarginImages(record), [record])
   const imageUrls = useObjectUrls(displayImages)
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(null)
@@ -162,6 +165,21 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     }
   }
 
+  async function sendRecordToCropMargin() {
+    if (!cropMarginImages.length) {
+      onShowToast('该记录没有可发送的图片', 'error')
+      return
+    }
+
+    try {
+      const images = await Promise.all(cropMarginImages.map((blob, index) => createCropMarginImage(record, blob, index)))
+      onSendToCropMargin(images)
+    }
+    catch (error) {
+      onShowToast(`发送失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
   return (
     <div className="history-card">
       <div className="history-thumb-rail">
@@ -222,6 +240,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
       </div>
       <div className="card-actions history-card-actions" onClick={event => event.stopPropagation()}>
         <button className="history-action-btn primary-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>{record.mode === 'upscale' ? '回显到超分台' : '回显到工作台'}</button>
+        <button className="history-action-btn" type="button" disabled={!cropMarginImages.length} onClick={() => void sendRecordToCropMargin()}>发送到裁剪台</button>
         <button className="history-action-btn delete-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id)}>删除记录</button>
       </div>
       {hasPreview
@@ -296,6 +315,36 @@ function getHistoryImageFilename(record: HistoryRecord, index: number, mimeType:
   return `${label}_${recordId}_${sanitizeFilename(record.modelId || 'image')}_${index + 1}_${makeTimestamp()}.${extension}`
 }
 
+async function createCropMarginImage(record: HistoryRecord, blob: Blob, index: number): Promise<CropMarginIncomingImage> {
+  const mimeType = normalizeImageMimeType(blob.type)
+  const [base64, dimensions] = await Promise.all([blobToBase64(blob), readBlobImageDimensions(blob)])
+  return {
+    id: `history_${record.id || record.timestamp}_${index}_${Date.now()}`,
+    fileName: getHistoryImageFilename(record, index, mimeType),
+    fileSize: blob.size,
+    mimeType,
+    base64,
+    width: dimensions.width,
+    height: dimensions.height,
+  }
+}
+
+function readBlobImageDimensions(blob: Blob) {
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve({ width: image.naturalWidth, height: image.naturalHeight })
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('图片尺寸读取失败'))
+    }
+    image.src = url
+  })
+}
+
 function getImageExtension(mimeType: ImageMimeType) {
   if (mimeType === 'image/jpeg')
     return 'jpg'
@@ -352,6 +401,34 @@ function getHistoryDisplayImages(record: HistoryRecord) {
   const factor = record.params.upscaleFactor || 2
   const output = record.upscaledImages?.[0]?.[factor]
   return output ? [output, ...(record.images || [])] : (record.images || EMPTY_HISTORY_IMAGES)
+}
+
+function getHistoryCropMarginImages(record: HistoryRecord) {
+  if (record.mode === 'upscale')
+    return getHistoryDisplayImages(record)
+
+  const images = record.images || EMPTY_HISTORY_IMAGES
+  if (!images.length)
+    return EMPTY_HISTORY_IMAGES
+
+  const nextImages: Blob[] = []
+  images.forEach((blob, index) => {
+    nextImages.push(blob)
+    const variants = record.upscaledImages?.[index]
+    if (!variants)
+      return
+
+    Object.keys(variants)
+      .map(Number)
+      .filter(factor => Number.isFinite(factor))
+      .sort((left, right) => left - right)
+      .forEach((factor) => {
+        const variant = variants[factor]
+        if (variant)
+          nextImages.push(variant)
+      })
+  })
+  return nextImages
 }
 
 function getPreviousImageIndex(index: number, total: number) {

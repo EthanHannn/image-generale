@@ -1,5 +1,6 @@
 import { formatSize } from '../../lib/utils'
 import type { HistoryRecord, HistoryStoragePolicy } from '../../lib/storage'
+import type { CropMarginIncomingImage } from '../crop-margin/types'
 import { HistoryList } from './HistoryList'
 import { HistoryToolbar } from './HistoryToolbar'
 
@@ -21,6 +22,7 @@ type HistoryViewProps = {
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePendingIds: Record<number, boolean>
   onShowToast: (message: string, type: 'success' | 'error') => void
+  onSendToCropMargin: (images: CropMarginIncomingImage[]) => void
 }
 
 export function HistoryView(props: HistoryViewProps) {
@@ -42,6 +44,7 @@ export function HistoryView(props: HistoryViewProps) {
     onToggleFavorite,
     favoritePendingIds,
     onShowToast,
+    onSendToCropMargin,
   } = props
 
   const hasStorageLimit = storagePolicy.limitMode === 'limited' && !!storagePolicy.limitBytes
@@ -136,6 +139,7 @@ export function HistoryView(props: HistoryViewProps) {
           onToggleFavorite={onToggleFavorite}
           favoritePendingIds={favoritePendingIds}
           onShowToast={onShowToast}
+          onSendToCropMargin={onSendToCropMargin}
         />
       </section>
     </div>

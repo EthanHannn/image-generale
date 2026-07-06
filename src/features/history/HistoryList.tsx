@@ -1,5 +1,6 @@
 import type { HistoryRecord } from '../../lib/storage'
 import { Icon } from '../../components/Icon'
+import type { CropMarginIncomingImage } from '../crop-margin/types'
 import { HistoryRecordCard } from './HistoryRecordCard'
 
 type HistoryListProps = {
@@ -11,6 +12,7 @@ type HistoryListProps = {
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePendingIds: Record<number, boolean>
   onShowToast: (message: string, type: 'success' | 'error') => void
+  onSendToCropMargin: (images: CropMarginIncomingImage[]) => void
 }
 
 export function HistoryList(props: HistoryListProps) {
@@ -23,6 +25,7 @@ export function HistoryList(props: HistoryListProps) {
     onToggleFavorite,
     favoritePendingIds,
     onShowToast,
+    onSendToCropMargin,
   } = props
   const hasFavoriteRecords = historyRecords.some(record => record.isFavorite)
   const emptyText = historyRecords.length
@@ -59,6 +62,7 @@ export function HistoryList(props: HistoryListProps) {
               onToggleFavorite={onToggleFavorite}
               favoritePending={record.id === undefined ? false : !!favoritePendingIds[record.id]}
               onShowToast={onShowToast}
+              onSendToCropMargin={onSendToCropMargin}
             />
           ))}
     </div>
