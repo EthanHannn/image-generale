@@ -2,6 +2,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { Icon, type IconName } from './components/Icon'
+import { CropMarginView } from './features/crop-margin/CropMarginView'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -45,7 +46,7 @@ type StatusValue = { type: StatusType; message: string } | null
 type ToastValue = { type: 'success' | 'error'; message: string } | null
 type ResultImage = { b64_json?: string; url?: string }
 type ResultPayload = { data?: ResultImage[]; error?: { message?: string } | string }
-type ViewName = 'workspace' | 'upscale' | 'history' | 'settings'
+type ViewName = 'workspace' | 'upscale' | 'cropMargin' | 'history' | 'settings'
 type UpscaleFactor = 1 | 2 | 3 | 4
 type StandaloneUpscaleFactor = 2 | 3 | 4
 type ImageDimensions = { width: number; height: number }
@@ -60,7 +61,7 @@ type ImageContextMenuState = {
   target: ImageContextMenuTarget
 }
 type GlobalDropTarget =
-  | { status: 'ready'; kind: 'workspace' | 'upscale'; title: string; hint: string }
+  | { status: 'ready'; kind: 'workspace' | 'upscale' | 'cropMargin'; title: string; hint: string }
   | { status: 'blocked'; title: string; hint: string }
 type ImagePreviewState = {
   image: string
@@ -662,10 +663,19 @@ export default function App() {
       }
     }
 
+    if (view === 'cropMargin') {
+      return {
+        status: 'ready',
+        kind: 'cropMargin',
+        title: '拖放图片进入裁剪台',
+        hint: '松开后载入图片，并在右侧新增裁剪区。',
+      }
+    }
+
     return {
       status: 'blocked',
       title: '当前页面不支持拖入图片',
-      hint: '请进入工作台图生图或独立超分页面。',
+      hint: '请进入工作台、超分或裁剪台页面。',
     }
   }
 
@@ -700,6 +710,11 @@ export default function App() {
 
     if (dropTarget.kind === 'workspace') {
       acceptWorkspaceDropFiles(imageFiles)
+      return
+    }
+
+    if (dropTarget.kind === 'cropMargin') {
+      window.dispatchEvent(new CustomEvent('crop-margin:files', { detail: { files: imageFiles } }))
       return
     }
 
@@ -2243,14 +2258,17 @@ export default function App() {
   const navItems: Array<{ id: ViewName; label: string; icon: IconName; hint: string }> = [
     { id: 'workspace', label: '工作台', icon: 'navWorkspace', hint: '生成与结果' },
     { id: 'upscale', label: '超分', icon: 'navUpscale', hint: '独立放大' },
+    { id: 'cropMargin', label: '裁剪台', icon: 'navCrop', hint: '扩边裁线' },
     { id: 'history', label: '历史记录', icon: 'navHistory', hint: '资产浏览' },
     { id: 'settings', label: '设置', icon: 'navSettings', hint: '系统与配置' },
   ]
-  const viewTitle = view === 'workspace' ? '工作台' : view === 'upscale' ? '超分' : view === 'history' ? '历史记录' : '设置'
+  const viewTitle = view === 'workspace' ? '工作台' : view === 'upscale' ? '超分' : view === 'cropMargin' ? '裁剪台' : view === 'history' ? '历史记录' : '设置'
   const viewDesc = view === 'workspace'
     ? '围绕当前供应商与模型完成图片生成和结果处理。'
     : view === 'upscale'
       ? '上传本地图片，单独执行高清放大并保存到历史记录。'
+    : view === 'cropMargin'
+      ? '为图片右侧新增可裁剪空白区，导出时保留原图主体像素。'
     : view === 'history'
       ? '查看、筛选并回显本地历史生成记录。'
       : '集中管理供应商、放大服务、历史目录与外观主题。'
@@ -3280,6 +3298,7 @@ export default function App() {
           <div className="view-body">
             {view === 'workspace' ? renderWorkspaceView() : null}
             {view === 'upscale' ? renderStandaloneUpscaleView() : null}
+            {view === 'cropMargin' ? <CropMarginView onShowToast={showToast} /> : null}
             {view === 'history'
               ? (
                   <HistoryView

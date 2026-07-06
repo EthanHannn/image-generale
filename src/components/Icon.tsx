@@ -12,6 +12,7 @@ export type IconName =
   | 'minimize'
   | 'moon'
   | 'navHistory'
+  | 'navCrop'
   | 'navSettings'
   | 'navUpscale'
   | 'navWorkspace'
@@ -134,6 +135,15 @@ function renderIconPath(name: IconName) {
           <circle cx="12" cy="12" r="7.2" />
           <circle cx="12" cy="12" r="2.2" />
           <circle cx="17.2" cy="7.8" r=".85" fill="currentColor" stroke="none" />
+        </>
+      )
+    case 'navCrop':
+      return (
+        <>
+          <path d="M7 4v13a3 3 0 0 0 3 3h10" />
+          <path d="M4 7h10a3 3 0 0 1 3 3v10" />
+          <path d="M8.4 8.4 15.6 15.6" />
+          <path d="M14.6 8.8 16.2 7l1.6 1.8" />
         </>
       )
     case 'navSettings':
