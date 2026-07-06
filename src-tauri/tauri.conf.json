@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Image Generator",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.hpk.image-generator",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -59,6 +59,11 @@
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": true,
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "customLanguageFiles": {
+          "English": "nsis/English.nsh",
+          "SimpChinese": "nsis/SimpChinese.nsh"
+        },
         "languages": [
           "English",
           "SimpChinese"

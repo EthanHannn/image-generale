@@ -1,6 +1,6 @@
 [package]
 name = "image_generator_desktop"
-version = "0.1.1"
+version = "0.1.2"
 description = "Desktop shell for Image Generator"
 authors = ["project"]
 edition = "2021"

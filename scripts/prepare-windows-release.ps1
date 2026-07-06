@@ -10,15 +10,17 @@ if ([string]::IsNullOrWhiteSpace($version)) {
 }
 
 $bundleRoot = Join-Path $projectRoot 'src-tauri\target\release\bundle'
-$nsisSource = Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'nsis') -Filter '*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-$msiSource = Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'msi') -Filter '*.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+$nsisSource = Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'nsis') -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -like "*_$version`_*setup.exe" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+$msiSource = Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'msi') -Filter '*.msi' -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -like "*_$version`_*.msi" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
 
 if ($null -eq $nsisSource) {
   throw 'NSIS installer not found. Run npm run desktop:build:windows:nsis first.'
-}
-
-if ($null -eq $msiSource) {
-  throw 'MSI installer not found. Run npm run desktop:build:windows:msi first.'
 }
 
 $releaseDir = Join-Path $projectRoot (Join-Path 'release' (Join-Path $version 'windows-x64'))
@@ -33,12 +35,12 @@ $files = @(
   @{
     Source = $nsisSource.FullName
     Name = "ImageGenerator-$version-windows-x64-setup.exe"
-  },
-  @{
-    Source = $msiSource.FullName
-    Name = "ImageGenerator-$version-windows-x64.msi"
   }
 )
+
+if ($null -ne $msiSource) {
+  Write-Host 'MSI package found but not included in public Windows release files.'
+}
 
 foreach ($file in $files) {
   Copy-Item -LiteralPath $file.Source -Destination (Join-Path $releaseDir $file.Name)
@@ -73,9 +75,7 @@ $releaseNotes = @(
   '## Verification'
   ''
   '- Windows NSIS install, launch, uninstall'
-  '- Windows MSI install, launch, uninstall'
   '- Windows NSIS upgrade, launch, data retention'
-  '- Windows MSI administrator upgrade, launch, data retention'
   '- SHA256 checksums included'
   '- Windows packages are unsigned unless a signing certificate is explicitly configured'
   ''
@@ -86,7 +86,6 @@ $releaseNotes = @(
   '## Artifacts'
   ''
   "- ImageGenerator-$version-windows-x64-setup.exe"
-  "- ImageGenerator-$version-windows-x64.msi"
 )
 
 Set-Content -LiteralPath (Join-Path $releaseDir 'release-notes.md') -Value $releaseNotes -Encoding UTF8
