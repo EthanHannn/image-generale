@@ -97,7 +97,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
 
   function getBoundedContextMenuPosition(clientX: number, clientY: number) {
     const menuWidth = 204
-    const menuHeight = 88
+    const menuHeight = 126
     const margin = 8
     const x = Math.min(clientX, window.innerWidth - menuWidth - margin)
     const y = Math.min(clientY, window.innerHeight - menuHeight - margin)
@@ -162,6 +162,25 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     }
     catch (error) {
       onShowToast(`复制失败: ${getErrorMessage(error)}`, 'error')
+    }
+  }
+
+  async function sendContextImageToCropMargin() {
+    const index = contextMenu?.index
+    closeContextMenu()
+    if (index === undefined)
+      return
+
+    const blob = displayImages[index]
+    if (!blob)
+      return
+
+    try {
+      const image = await createCropMarginImage(record, blob, index)
+      onSendToCropMargin([image])
+    }
+    catch (error) {
+      onShowToast(`发送失败: ${getErrorMessage(error)}`, 'error')
     }
   }
 
@@ -292,6 +311,9 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
                 </button>
                 <button type="button" onClick={() => void copyContextImage()}>
                   <span>复制 Base64</span>
+                </button>
+                <button type="button" onClick={() => void sendContextImageToCropMargin()}>
+                  <span>发送到裁剪台</span>
                 </button>
               </div>
             </div>,

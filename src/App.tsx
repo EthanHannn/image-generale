@@ -866,7 +866,7 @@ export default function App() {
 
   function getBoundedContextMenuPosition(clientX: number, clientY: number) {
     const menuWidth = 204
-    const menuHeight = 88
+    const menuHeight = 126
     const margin = 8
     const x = Math.min(clientX, window.innerWidth - menuWidth - margin)
     const y = Math.min(clientY, window.innerHeight - menuHeight - margin)
@@ -911,6 +911,34 @@ export default function App() {
       return
     }
     void copyStandaloneContextImage(target)
+  }
+
+  async function handleContextMenuSendToCropMargin() {
+    const target = imageContextMenu?.target
+    closeImageContextMenu()
+    if (!target)
+      return
+
+    if (target.type === 'result') {
+      await sendResultToCropMargin(target.index)
+      return
+    }
+
+    try {
+      const dimensions = await readBase64ImageSize(target.imageBase64, target.mimeType)
+      openCropMarginWithImages([{
+        id: `standalone_context_${Date.now()}`,
+        fileName: target.filename,
+        fileSize: getBase64ByteLength(target.imageBase64),
+        mimeType: target.mimeType,
+        base64: target.imageBase64,
+        width: dimensions.width,
+        height: dimensions.height,
+      }], '已发送到裁剪台')
+    }
+    catch (error) {
+      showToast(`发送失败: ${getErrorMessage(error)}`, 'error')
+    }
   }
 
   function resetPreviewSplit() {
@@ -3513,6 +3541,9 @@ export default function App() {
                 <button type="button" onClick={handleContextMenuCopy}>
                   <span>复制 Base64</span>
                 </button>
+                <button type="button" onClick={() => void handleContextMenuSendToCropMargin()}>
+                  <span>发送到裁剪台</span>
+                </button>
               </div>
             </div>
           )
@@ -4146,12 +4177,12 @@ function parseImageSize(text: string | undefined) {
   return { width: Number(match[1]), height: Number(match[2]) }
 }
 
-function readBase64ImageSize(imageBase64: string) {
+function readBase64ImageSize(imageBase64: string, mimeType = 'image/png') {
   return new Promise<{ width: number; height: number }>((resolve, reject) => {
     const image = new Image()
     image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
     image.onerror = () => reject(new Error('图片尺寸读取失败'))
-    image.src = `data:image/png;base64,${imageBase64}`
+    image.src = `data:${mimeType};base64,${imageBase64}`
   })
 }
 

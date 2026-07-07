@@ -2140,17 +2140,26 @@ button:disabled {
   width: 100%;
   height: 38px;
   padding: 0 10px;
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text);
   font-size: 13px;
   text-align: left;
+  box-shadow: none;
+  outline: none;
 }
 
 .image-context-menu button:hover:not(:disabled) {
+  border-color: transparent;
   background: var(--panel-hover);
   color: var(--text);
   transform: none;
+  box-shadow: none;
+}
+
+.image-context-menu button:focus-visible {
+  background: var(--panel-hover);
   box-shadow: none;
 }
 
