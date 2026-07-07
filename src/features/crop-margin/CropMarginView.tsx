@@ -27,6 +27,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
   const [templateId, setTemplateId] = useState<CropMarginTemplateId>('clean')
   const [widthLevel, setWidthLevel] = useState<CropMarginWidthLevel>('medium')
   const [isBatchSaving, setIsBatchSaving] = useState(false)
+  const [clearQueueConfirmOpen, setClearQueueConfirmOpen] = useState(false)
   const [renderState, setRenderState] = useState<RenderState>({ status: 'idle', output: null, message: '上传图片后生成预览' })
   const activeSource = sources.find(source => source.id === activeId) || sources[0] || null
   const activeVariant = activeSource ? getSelectedVariant(activeSource) : null
@@ -86,6 +87,19 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     window.addEventListener('crop-margin:files', handleExternalFiles)
     return () => window.removeEventListener('crop-margin:files', handleExternalFiles)
   }, [])
+
+  useEffect(() => {
+    if (!clearQueueConfirmOpen)
+      return
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape')
+        setClearQueueConfirmOpen(false)
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [clearQueueConfirmOpen])
 
   async function acceptFiles(files: File[]) {
     const imageFiles = files.filter(file => file.type.startsWith('image/'))
@@ -154,6 +168,22 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
 
   function clearSelectedSources() {
     setSelectedSourceIds(new Set())
+  }
+
+  function requestClearSourceQueue() {
+    if (!sources.length)
+      return
+
+    setClearQueueConfirmOpen(true)
+  }
+
+  function confirmClearSourceQueue() {
+    setSources([])
+    setActiveId('')
+    setSelectedSourceIds(new Set())
+    setClearQueueConfirmOpen(false)
+    setRenderState({ status: 'idle', output: null, message: '上传图片后生成预览' })
+    onShowToast('裁剪队列已清空', 'success')
   }
 
   function selectSourceVariant(sourceId: string, variantId: string) {
@@ -310,6 +340,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
                 <div className="crop-batch-toolbar">
                   <button type="button" className="secondary" onClick={selectAllSources}>全选</button>
                   <button type="button" className="secondary" onClick={clearSelectedSources}>清空选择</button>
+                  <button type="button" className="danger" onClick={requestClearSourceQueue}>清空队列</button>
                   <button
                     type="button"
                     className="dl-btn"
@@ -372,6 +403,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
               </div>
             )
           : null}
+
       </section>
 
       <section className="panel crop-margin-preview-panel">
@@ -439,10 +471,28 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
                   <strong>等待图片</strong>
                   <span>图片只在本次裁剪台会话中处理，不写入历史记录。</span>
                 </div>
-              )
+            )
             : null}
         </div>
       </section>
+
+      {clearQueueConfirmOpen
+        ? (
+            <div className="crop-confirm-layer" role="presentation" onClick={() => setClearQueueConfirmOpen(false)}>
+              <div className="crop-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="clear-crop-queue-title" onClick={event => event.stopPropagation()}>
+                <div className="crop-confirm-header">
+                  <span className="crop-confirm-icon"><Icon name="alert" size={16} /></span>
+                  <h3 id="clear-crop-queue-title">清空裁剪队列</h3>
+                </div>
+                <p>确定清空队列中的 {sources.length} 张图片吗？此操作不会删除历史记录或本地文件。</p>
+                <div className="crop-confirm-actions">
+                  <button type="button" className="secondary" onClick={() => setClearQueueConfirmOpen(false)}>取消</button>
+                  <button type="button" className="danger" onClick={confirmClearSourceQueue}>清空队列</button>
+                </div>
+              </div>
+            </div>
+          )
+        : null}
     </div>
   )
 }

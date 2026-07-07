@@ -11,6 +11,8 @@ type RenderCropMarginOptions = {
 
 const MIN_MARGIN_WIDTH = 160
 const MAX_MARGIN_WIDTH = 640
+const MAX_CANVAS_SIDE = 32767
+const MAX_CANVAS_AREA = 268_000_000
 const WATERMARK_BADGE_URL = new URL('../../assets/watermark-crop-badge.png', import.meta.url).href
 
 export function getCropMarginWidth(sourceWidth: number, ratio: number) {
@@ -25,6 +27,7 @@ export async function renderCropMarginImage(options: RenderCropMarginOptions): P
   const marginWidth = getCropMarginWidth(options.sourceWidth, options.marginRatio)
   const outputWidth = options.sourceWidth + marginWidth
   const outputHeight = options.sourceHeight
+  validateCanvasSize(outputWidth, outputHeight)
   const canvas = document.createElement('canvas')
   canvas.width = outputWidth
   canvas.height = outputHeight
@@ -43,6 +46,17 @@ export async function renderCropMarginImage(options: RenderCropMarginOptions): P
   return { base64, marginWidth, outputWidth, outputHeight }
 }
 
+function validateCanvasSize(width: number, height: number) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0)
+    throw new Error('图片尺寸无效，无法生成水印裁剪区')
+
+  if (width > MAX_CANVAS_SIDE || height > MAX_CANVAS_SIDE)
+    throw new Error(`图片尺寸过大，当前输出 ${width} × ${height}px 超出画布边长限制，请先缩小图片后再处理`)
+
+  if (width * height > MAX_CANVAS_AREA)
+    throw new Error(`图片尺寸过大，当前输出 ${width} × ${height}px 超出画布面积限制，请先缩小图片后再处理`)
+}
+
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image()
@@ -58,7 +72,7 @@ function canvasToBlob(canvas: HTMLCanvasElement) {
       if (blob)
         resolve(blob)
       else
-        reject(new Error('图片导出失败'))
+        reject(new Error('图片导出失败，可能是输出尺寸过大或当前环境不支持该画布尺寸'))
     }, 'image/png')
   })
 }
