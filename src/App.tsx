@@ -161,6 +161,7 @@ const emptyParams: RequestParams = {
   size: '',
   quality: 'auto',
   autoPrompt: 'false',
+  promptSizeHint: 'false',
   translate: 'false',
 }
 
@@ -671,7 +672,7 @@ export default function App() {
         status: 'ready',
         kind: 'cropMargin',
         title: '拖放图片进入裁剪台',
-        hint: '松开后载入图片，并在右侧新增裁剪区。',
+        hint: '松开后载入图片，并在右侧新增水印裁剪区。',
       }
     }
 
@@ -817,8 +818,8 @@ export default function App() {
     return `source_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${makeTimestamp()}.${getImageExtension(mimeType)}`
   }
 
-  function getStandaloneOutputFilename() {
-    return `upscale_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${standaloneUpscale.factor}x_${makeTimestamp()}.png`
+  function getStandaloneOutputFilename(factor = standaloneUpscale.factor) {
+    return `upscale_${sanitizeFilename(standaloneUpscale.fileName || 'image')}_${factor}x_${makeTimestamp()}.png`
   }
 
   function normalizeImageMimeType(mimeType: string): ImageMimeType {
@@ -1476,6 +1477,7 @@ export default function App() {
       return
     }
     const currentSizePlan = currentSizePlanResult.plan
+    const requestPrompt = makeRequestPrompt(prompt.trim(), currentSizePlan, targetSize, params.promptSizeHint === 'true')
     if (targetSize.autoUpscale && currentSizePlan.needsUpscale && !isUpscaleProviderConfigured(currentUpscaleProvider)) {
       setGenStatus({ type: 'err', message: '自动超分需要先配置超分服务' })
       return
@@ -1523,7 +1525,7 @@ export default function App() {
       let nextRequestJson = ''
       if (mode === 'gen') {
         const body: Record<string, unknown> = {
-          prompt: prompt.trim(),
+          prompt: requestPrompt,
           model: currentModel.id,
           n: Math.min(params.n || 1, currentModel.maxGenerations),
           size: currentSizePlan.requestSize,
@@ -1551,7 +1553,7 @@ export default function App() {
         const formData = new FormData()
         const fieldName = useRefFiles.length > 1 ? 'image[]' : 'image'
         useRefFiles.forEach(file => formData.append(fieldName, file))
-        formData.append('prompt', prompt.trim())
+        formData.append('prompt', requestPrompt)
         formData.append('model', currentModel.id)
         formData.append('n', String(Math.min(params.n || 1, currentModel.maxGenerations)))
         formData.append('size', currentSizePlan.requestSize)
@@ -1561,7 +1563,7 @@ export default function App() {
         if (currentModel.hasResolution && params.resolution)
           formData.append('resolution', params.resolution)
 
-        nextRequestJson = `[multipart] prompt=${prompt.trim()} model=${currentModel.id} refImages=${useRefFiles.length} size=${currentSizePlan.requestSize}`
+        nextRequestJson = `[multipart] prompt=${requestPrompt} model=${currentModel.id} refImages=${useRefFiles.length} size=${currentSizePlan.requestSize}`
         setRequestJson(nextRequestJson)
         setGenStatus({ type: 'loading', message: `图生图中（上传 ${useRefFiles.length} 张参考图，约 15-30s）...` })
         response = await fetch(`${baseUrl}/v1/images/edits`, {
@@ -1607,7 +1609,7 @@ export default function App() {
       setResultUpscaleVariants({})
       setGenStatus({ type: 'ok', message: `成功生成 ${nextResults.length} 张，用时 ${duration}s` })
       showToast(`生成成功：${nextResults.length} 张图片`, 'success')
-      const recordId = await saveHistory(nextResults, duration, nextRequestJson, currentSizePlan)
+      const recordId = await saveHistory(nextResults, duration, nextRequestJson, currentSizePlan, requestPrompt)
       if (targetSize.autoUpscale && currentSizePlan.needsUpscale && currentSizePlan.canAutoUpscale)
         void runAutoUpscaleQueue(nextResults, currentSizePlan, recordId)
     }
@@ -1638,7 +1640,7 @@ export default function App() {
     }
   }
 
-  async function saveHistory(nextResults: ResultImage[], duration: string, nextRequestJson: string, plan: SizePlan) {
+  async function saveHistory(nextResults: ResultImage[], duration: string, nextRequestJson: string, plan: SizePlan, requestPrompt: string) {
     if (!currentProvider || !currentModel || !nextResults.length)
       return null
 
@@ -1660,6 +1662,7 @@ export default function App() {
       size: plan.requestSize,
       quality: params.quality,
       autoPrompt: params.autoPrompt,
+      promptSizeHint: params.promptSizeHint,
       translate: params.translate,
       resolution: currentModel.hasResolution ? params.resolution : undefined,
       targetSizeMode: targetSize.mode,
@@ -1679,13 +1682,13 @@ export default function App() {
       mode,
       modelId: currentModel.id,
       modelName: currentModel.displayName || currentModel.id,
-      prompt: prompt.trim(),
+      prompt: requestPrompt,
       params: nextParams,
       images: imageBlobs,
       imageCount: imageBlobs.length,
       duration,
       requestJson: nextRequestJson,
-      totalSize: totalSize + JSON.stringify(nextParams).length + prompt.trim().length,
+      totalSize: totalSize + JSON.stringify(nextParams).length + requestPrompt.length,
       isFavorite: false,
       favoritedAt: null,
     })
@@ -1776,6 +1779,41 @@ export default function App() {
       width: standaloneUpscale.outputWidth,
       height: standaloneUpscale.outputHeight,
     }], '超分图已发送到裁剪台')
+  }
+
+  function sendStandaloneWorkbenchToCropMargin() {
+    const images: CropMarginIncomingImage[] = []
+
+    if (standaloneUpscale.sourceBase64) {
+      images.push({
+        id: `standalone_source_${Date.now()}`,
+        fileName: standaloneUpscale.fileName || 'source.png',
+        fileSize: standaloneUpscale.fileSize || getBase64ByteLength(standaloneUpscale.sourceBase64),
+        mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
+        base64: standaloneUpscale.sourceBase64,
+        width: standaloneUpscale.sourceWidth,
+        height: standaloneUpscale.sourceHeight,
+      })
+    }
+
+    const factors: StandaloneUpscaleFactor[] = [2, 3, 4]
+    factors.forEach((factor) => {
+      const variant = standaloneUpscale.completedFactors[factor]
+      if (!variant)
+        return
+
+      images.push({
+        id: `standalone_output_${factor}_${Date.now()}`,
+        fileName: getStandaloneOutputFilename(factor),
+        fileSize: getBase64ByteLength(variant.outputBase64),
+        mimeType: 'image/png',
+        base64: variant.outputBase64,
+        width: variant.outputWidth,
+        height: variant.outputHeight,
+      })
+    })
+
+    openCropMarginWithImages(images, `已发送 ${images.length} 张超分台图片到裁剪台`)
   }
 
   function sendHistoryImagesToCropMargin(images: CropMarginIncomingImage[]) {
@@ -2199,6 +2237,7 @@ export default function App() {
       size: record.params.size || '',
       quality: record.params.quality || 'auto',
       autoPrompt: String(record.params.autoPrompt ?? 'false'),
+      promptSizeHint: String(record.params.promptSizeHint ?? 'false'),
       translate: String(record.params.translate ?? 'false'),
       resolution: record.params.resolution,
     })
@@ -2511,6 +2550,13 @@ export default function App() {
               <div>
                 <label htmlFor="autoPrompt">自动补全</label>
                 <select id="autoPrompt" value={params.autoPrompt} onChange={event => setParams(current => ({ ...current, autoPrompt: event.target.value }))}>
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="promptSizeHint">尺寸入词</label>
+                <select id="promptSizeHint" value={params.promptSizeHint || 'false'} onChange={event => setParams(current => ({ ...current, promptSizeHint: event.target.value }))}>
                   <option value="false">false</option>
                   <option value="true">true</option>
                 </select>
@@ -2974,7 +3020,7 @@ export default function App() {
               {outputUrl
                 ? (
                   <div className="standalone-preview-actions">
-                    <button className="dl-btn" type="button" onClick={() => void sendStandaloneOutputToCropMargin()}>发送到裁剪台</button>
+                    <button className="dl-btn" type="button" onClick={() => sendStandaloneWorkbenchToCropMargin()}>全部发送到裁剪台</button>
                     <button className="dl-btn" type="button" onClick={() => void downloadStandaloneOutput()}>下载超分图</button>
                   </div>
                 )
@@ -4024,7 +4070,7 @@ function makeTargetSizeFromPreset(size: string): TargetSizeState {
   const parsedSize = parseSize(size)
   if (parsedSize) {
     return {
-      mode: 'manual',
+      mode: 'ratio',
       ratioText: formatRatioFromSize(parsedSize.width, parsedSize.height),
       targetWidth: parsedSize.width,
       targetHeight: parsedSize.height,
@@ -4044,6 +4090,20 @@ function makeTargetSizeFromPreset(size: string): TargetSizeState {
   }
 
   return defaultTargetSize
+}
+
+function makeRequestPrompt(prompt: string, plan: SizePlan, targetSize: TargetSizeState, shouldAppendSize: boolean) {
+  if (!shouldAppendSize)
+    return prompt
+
+  const ratioText = targetSize.mode === 'ratio' && parseRatio(targetSize.ratioText)
+    ? targetSize.ratioText.trim()
+    : ''
+  const suffix = [ratioText, `${plan.generationWidth} ${plan.generationHeight}`].filter(Boolean).join(', ')
+  if (!suffix || prompt.endsWith(suffix))
+    return prompt
+
+  return `${prompt} ${suffix}`.trim()
 }
 
 function makeTargetSizeFromParams(params: RequestParams): TargetSizeState {

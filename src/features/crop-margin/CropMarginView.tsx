@@ -41,7 +41,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     }
 
     let cancelled = false
-    setRenderState({ status: 'loading', output: null, message: '正在生成裁剪区预览' })
+    setRenderState({ status: 'loading', output: null, message: '正在生成水印裁剪区预览' })
     void renderCropMarginImage({
       sourceDataUrl: sourceUrl,
       sourceWidth: activeSource.width,
@@ -114,13 +114,27 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     void acceptFiles(Array.from(event.dataTransfer.files || []))
   }
 
+  function removeSource(sourceId: string) {
+    const sourceIndex = sources.findIndex(source => source.id === sourceId)
+    if (sourceIndex < 0)
+      return
+
+    const nextSources = sources.filter(source => source.id !== sourceId)
+    setSources(nextSources)
+
+    if (activeSource?.id === sourceId) {
+      const nextActive = nextSources[Math.min(sourceIndex, nextSources.length - 1)] || null
+      setActiveId(nextActive?.id || '')
+    }
+  }
+
   async function handleDownload() {
     if (!activeSource || !renderState.output) {
       onShowToast('暂无可下载图片', 'error')
       return
     }
 
-    const filename = `crop_margin_${sanitizeFilename(activeSource.fileName)}_${templateId}_${makeTimestamp()}.png`
+    const filename = `watermark_crop_margin_${sanitizeFilename(activeSource.fileName)}_${templateId}_${makeTimestamp()}.png`
     try {
       const result = await saveImageFile({ imageBase64: renderState.output.base64, filename, mimeType: 'image/png' })
       if (result.status === 'cancelled')
@@ -139,7 +153,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
         <div className="panel-heading compact">
           <div>
             <h2>图片上传</h2>
-            <div className="panel-caption">右侧新增裁剪区，原图主体按原始像素保留。</div>
+            <div className="panel-caption">右侧新增水印裁剪区，原图主体按原始像素保留。</div>
           </div>
         </div>
 
@@ -180,7 +194,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
 
         <div className="crop-margin-section">
           <div className="crop-margin-section-head">
-            <span>裁剪区宽度</span>
+            <span>水印裁剪区宽度</span>
             <small>{activeSource ? `${expectedMarginWidth}px` : '等待图片尺寸'}</small>
           </div>
           <div className="crop-width-row">
@@ -207,15 +221,21 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
                 </div>
                 <div className="crop-source-list">
                   {sources.map(source => (
-                    <button
-                      key={source.id}
-                      type="button"
-                      className={`crop-source-item ${activeSource?.id === source.id ? 'active' : ''}`}
-                      onClick={() => setActiveId(source.id)}
-                    >
-                      <span>{source.fileName}</span>
-                      <small>{source.width} × {source.height}px</small>
-                    </button>
+                    <div key={source.id} className={`crop-source-item ${activeSource?.id === source.id ? 'active' : ''}`}>
+                      <button type="button" className="crop-source-select" onClick={() => setActiveId(source.id)}>
+                        <span>{source.fileName}</span>
+                        <small>{source.width} × {source.height}px</small>
+                      </button>
+                      <button
+                        type="button"
+                        className="crop-source-remove"
+                        title="从队列移除"
+                        aria-label={`从队列移除 ${source.fileName}`}
+                        onClick={() => removeSource(source.id)}
+                      >
+                        <Icon name="close" size={14} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -242,7 +262,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
                   <strong>{activeSource.width} × {activeSource.height}px</strong>
                 </div>
                 <div>
-                  <span>新增裁剪区</span>
+                  <span>新增水印裁剪区</span>
                   <strong>{renderState.output?.marginWidth || expectedMarginWidth}px</strong>
                 </div>
                 <div>
@@ -259,7 +279,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
                 <div className="standalone-preview-empty">
                   <span className="spinner" />
                   <strong>正在生成预览</strong>
-                  <span>原图不缩放，只在右侧新增裁剪区。</span>
+                  <span>原图不缩放，只在右侧新增水印裁剪区。</span>
                 </div>
               )
             : null}
@@ -276,7 +296,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
           {outputUrl
             ? (
                 <div className="crop-preview-frame">
-                  <img src={outputUrl} alt="裁剪区输出预览" />
+                  <img src={outputUrl} alt="水印裁剪区输出预览" />
                 </div>
               )
             : null}

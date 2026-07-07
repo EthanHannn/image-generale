@@ -41,6 +41,7 @@ export type RequestParams = {
   size: string
   quality: string
   autoPrompt: string
+  promptSizeHint?: string
   translate: string
   resolution?: string
   targetSizeMode?: 'ratio' | 'manual'

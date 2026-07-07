@@ -2748,11 +2748,12 @@ button:disabled {
 
 .crop-source-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 30px;
   gap: 8px;
   align-items: center;
   width: 100%;
-  padding: 10px 12px;
+  min-height: 48px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel-solid) 84%, var(--input-bg));
@@ -2760,7 +2761,7 @@ button:disabled {
   text-align: left;
 }
 
-.crop-source-item:hover:not(:disabled) {
+.crop-source-item:hover {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
   background: var(--panel-hover);
   transform: none;
@@ -2772,17 +2773,56 @@ button:disabled {
   background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
 }
 
-.crop-source-item span,
-.crop-source-item small {
+.crop-source-select {
+  display: grid;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.crop-source-select:hover:not(:disabled) {
+  background: transparent;
+  color: inherit;
+  transform: none;
+  box-shadow: none;
+}
+
+.crop-source-select span,
+.crop-source-select small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.crop-source-item small {
+.crop-source-select small {
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.crop-source-remove {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+.crop-source-remove:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--err) 28%, var(--border));
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+  color: var(--err);
+  transform: none;
+  box-shadow: none;
 }
 
 .crop-quality-strip {

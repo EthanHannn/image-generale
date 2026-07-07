@@ -23,7 +23,7 @@ export const cropMarginTemplates: CropMarginTemplate[] = [
   {
     id: 'clean',
     name: '清爽白边',
-    summary: '白底、细分割线、简约小猫标记',
+    summary: '白底、细分割线、位图标记',
     background: '#ffffff',
     line: '#d4d8e1',
     text: '#3f4656',
@@ -34,7 +34,7 @@ export const cropMarginTemplates: CropMarginTemplate[] = [
   {
     id: 'note',
     name: '便签软糖',
-    summary: '暖色底、虚线分割线、轻提示文案',
+    summary: '暖色底、虚线分割线、提示文案',
     background: '#fff4f4',
     line: '#f3a6b6',
     text: '#7c3f4f',
@@ -45,7 +45,7 @@ export const cropMarginTemplates: CropMarginTemplate[] = [
   {
     id: 'grid',
     name: '方格贴纸',
-    summary: '灰白方格、徽标感猫头、实线边界',
+    summary: '灰白方格、位图徽标、实线边界',
     background: '#f8fafc',
     line: '#cbd5e1',
     text: '#334155',
