@@ -2747,6 +2747,23 @@ button:disabled {
   min-width: 64px;
 }
 
+.crop-batch-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.crop-batch-toolbar button {
+  min-width: 0;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.crop-batch-toolbar .dl-btn {
+  grid-column: 1 / -1;
+}
+
 .crop-source-list {
   display: grid;
   gap: 8px;
@@ -2757,7 +2774,7 @@ button:disabled {
 
 .crop-source-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: 24px minmax(0, 1fr) 30px;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -2768,6 +2785,22 @@ button:disabled {
   background: color-mix(in srgb, var(--panel-solid) 84%, var(--input-bg));
   color: var(--text);
   text-align: left;
+}
+
+.crop-source-check {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 30px;
+  margin: 0;
+}
+
+.crop-source-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
 }
 
 .crop-source-item:hover {

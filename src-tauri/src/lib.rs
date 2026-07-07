@@ -138,6 +138,23 @@ struct SaveImageFileResult {
     path: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveImageBatchItem {
+    image_base64: String,
+    filename: String,
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveImageBatchResult {
+    status: String,
+    directory: Option<String>,
+    saved_count: usize,
+    failed_count: usize,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageCleanupResult {
@@ -567,6 +584,40 @@ fn normalize_save_file_name(filename: &str, extension: &str) -> String {
     format!("{}.{}", stem, extension)
 }
 
+fn write_image_file(save_path: &Path, image_base64: &str) -> Result<(), String> {
+    let bytes = STANDARD
+        .decode(image_base64)
+        .map_err(|error| format!("图片数据解码失败: {}", error))?;
+    fs::write(save_path, bytes).map_err(|error| format!("保存图片失败: {}", error))
+}
+
+fn unique_save_path(path: PathBuf) -> PathBuf {
+    if !path.exists() {
+        return path;
+    }
+
+    let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("image");
+    let extension = path.extension().and_then(|value| value.to_str());
+
+    for index in 2..10000 {
+        let file_name = match extension {
+            Some(extension) => format!("{}_{}.{}", stem, index, extension),
+            None => format!("{}_{}", stem, index),
+        };
+        let next_path = parent.join(file_name);
+        if !next_path.exists() {
+            return next_path;
+        }
+    }
+
+    path
+}
+
 #[tauri::command]
 fn save_image_file(
     app: AppHandle,
@@ -596,14 +647,53 @@ fn save_image_file(
     } else {
         selected_path
     };
-    let bytes = STANDARD
-        .decode(&image_base64)
-        .map_err(|error| format!("图片数据解码失败: {}", error))?;
-    fs::write(&save_path, bytes).map_err(|error| format!("保存图片失败: {}", error))?;
+    write_image_file(&save_path, &image_base64)?;
 
     Ok(SaveImageFileResult {
         status: "saved".to_string(),
         path: Some(save_path.to_string_lossy().to_string()),
+    })
+}
+
+#[tauri::command]
+fn save_image_files_to_directory(
+    app: AppHandle,
+    images: Vec<SaveImageBatchItem>,
+) -> Result<SaveImageBatchResult, String> {
+    let mut dialog = FileDialog::new();
+    if let Ok(download_dir) = app.path().download_dir() {
+        dialog = dialog.set_directory(download_dir);
+    }
+
+    let Some(directory) = dialog.pick_folder() else {
+        return Ok(SaveImageBatchResult {
+            status: "cancelled".to_string(),
+            directory: None,
+            saved_count: 0,
+            failed_count: 0,
+        });
+    };
+
+    fs::create_dir_all(&directory).map_err(|error| format!("创建保存目录失败: {}", error))?;
+
+    let mut saved_count = 0;
+    let mut failed_count = 0;
+    for image in images {
+        let mime_type = image.mime_type.unwrap_or_else(|| "image/png".to_string());
+        let (extension, _, _) = image_save_filter(&mime_type);
+        let file_name = normalize_save_file_name(&image.filename, extension);
+        let save_path = unique_save_path(directory.join(file_name));
+        match write_image_file(&save_path, &image.image_base64) {
+            Ok(()) => saved_count += 1,
+            Err(_) => failed_count += 1,
+        }
+    }
+
+    Ok(SaveImageBatchResult {
+        status: "saved".to_string(),
+        directory: Some(directory.to_string_lossy().to_string()),
+        saved_count,
+        failed_count,
     })
 }
 
@@ -1558,6 +1648,7 @@ pub fn run() {
             open_history_directory,
             get_history_root_dir,
             save_image_file,
+            save_image_files_to_directory,
             add_history_record,
             set_history_record_favorite,
             save_history_upscale_variant,

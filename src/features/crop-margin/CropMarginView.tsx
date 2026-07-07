@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent } from 'react'
 import { Icon } from '../../components/Icon'
-import { saveImageFile } from '../../lib/files'
+import { saveImageFile, saveImageFilesToDirectory } from '../../lib/files'
 import { blobToBase64, formatSize, sanitizeFilename } from '../../lib/utils'
 import { cropMarginTemplates, cropMarginWidthOptions, getCropMarginTemplate, getCropMarginWidthOption } from './cropMarginTemplates'
 import { getCropMarginWidth, renderCropMarginImage } from './cropMarginRenderer'
@@ -23,12 +23,16 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
   const incomingVersionRef = useRef(0)
   const [sources, setSources] = useState<CropMarginSource[]>([])
   const [activeId, setActiveId] = useState('')
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set())
   const [templateId, setTemplateId] = useState<CropMarginTemplateId>('clean')
   const [widthLevel, setWidthLevel] = useState<CropMarginWidthLevel>('medium')
+  const [isBatchSaving, setIsBatchSaving] = useState(false)
   const [renderState, setRenderState] = useState<RenderState>({ status: 'idle', output: null, message: '上传图片后生成预览' })
   const activeSource = sources.find(source => source.id === activeId) || sources[0] || null
   const template = getCropMarginTemplate(templateId)
   const widthOption = getCropMarginWidthOption(widthLevel)
+  const selectedSources = sources.filter(source => selectedSourceIds.has(source.id))
+  const selectedCount = selectedSources.length
   const expectedMarginWidth = activeSource ? getCropMarginWidth(activeSource.width, widthOption.ratio) : 0
   const outputUrl = renderState.output ? `data:image/png;base64,${renderState.output.base64}` : ''
   const sourceUrl = activeSource ? `data:${activeSource.mimeType || 'image/png'};base64,${activeSource.base64}` : ''
@@ -72,6 +76,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     }))
     setSources(current => [...nextSources, ...current])
     setActiveId(nextSources[0]?.id || '')
+    setSelectedSourceIds(current => new Set([...nextSources.map(source => source.id), ...current]))
   }, [incomingImages, incomingVersion])
 
   useEffect(() => {
@@ -95,6 +100,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
       const nextSources = await Promise.all(imageFiles.map(readCropMarginSource))
       setSources(current => [...nextSources, ...current])
       setActiveId(nextSources[0]?.id || '')
+      setSelectedSourceIds(current => new Set([...nextSources.map(source => source.id), ...current]))
       onShowToast(`已载入 ${nextSources.length} 张图片`, 'success')
     }
     catch (error) {
@@ -121,11 +127,35 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
 
     const nextSources = sources.filter(source => source.id !== sourceId)
     setSources(nextSources)
+    setSelectedSourceIds((current) => {
+      const next = new Set(current)
+      next.delete(sourceId)
+      return next
+    })
 
     if (activeSource?.id === sourceId) {
       const nextActive = nextSources[Math.min(sourceIndex, nextSources.length - 1)] || null
       setActiveId(nextActive?.id || '')
     }
+  }
+
+  function toggleSourceSelected(sourceId: string) {
+    setSelectedSourceIds((current) => {
+      const next = new Set(current)
+      if (next.has(sourceId))
+        next.delete(sourceId)
+      else
+        next.add(sourceId)
+      return next
+    })
+  }
+
+  function selectAllSources() {
+    setSelectedSourceIds(new Set(sources.map(source => source.id)))
+  }
+
+  function clearSelectedSources() {
+    setSelectedSourceIds(new Set())
   }
 
   async function handleDownload() {
@@ -134,7 +164,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
       return
     }
 
-    const filename = `watermark_crop_margin_${sanitizeFilename(activeSource.fileName)}_${templateId}_${makeTimestamp()}.png`
+    const filename = makeOutputFilename(activeSource, templateId, makeTimestamp())
     try {
       const result = await saveImageFile({ imageBase64: renderState.output.base64, filename, mimeType: 'image/png' })
       if (result.status === 'cancelled')
@@ -144,6 +174,61 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     }
     catch (error) {
       onShowToast(`保存失败: ${error instanceof Error ? error.message : '未知错误'}`, 'error')
+    }
+  }
+
+  async function handleBatchDownload() {
+    if (!selectedSources.length) {
+      onShowToast('请先勾选要下载的图片', 'error')
+      return
+    }
+
+    setIsBatchSaving(true)
+    const timestamp = makeTimestamp()
+    let renderFailedCount = 0
+
+    try {
+      const images = []
+      for (const [index, source] of selectedSources.entries()) {
+        try {
+          const output = await renderCropMarginImage({
+            sourceDataUrl: `data:${source.mimeType || 'image/png'};base64,${source.base64}`,
+            sourceWidth: source.width,
+            sourceHeight: source.height,
+            marginRatio: widthOption.ratio,
+            template,
+          })
+          images.push({
+            imageBase64: output.base64,
+            filename: makeOutputFilename(source, templateId, timestamp, index + 1),
+            mimeType: 'image/png' as const,
+          })
+        }
+        catch {
+          renderFailedCount += 1
+        }
+      }
+
+      if (!images.length) {
+        onShowToast('批量保存失败：没有生成可保存图片', 'error')
+        return
+      }
+
+      const result = await saveImageFilesToDirectory(images)
+      if (result.status === 'cancelled')
+        return
+
+      const failedCount = renderFailedCount + result.failedCount
+      if (failedCount)
+        onShowToast(`批量完成：保存 ${result.savedCount} 张，失败 ${failedCount} 张`, 'error')
+      else
+        onShowToast(`批量完成：保存 ${result.savedCount} 张`, 'success')
+    }
+    catch (error) {
+      onShowToast(`批量保存失败: ${error instanceof Error ? error.message : '未知错误'}`, 'error')
+    }
+    finally {
+      setIsBatchSaving(false)
     }
   }
 
@@ -217,11 +302,30 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
               <div className="crop-margin-section">
                 <div className="crop-margin-section-head">
                   <span>当前队列</span>
-                  <small>{sources.length} 张</small>
+                  <small>{selectedCount} / {sources.length} 张已选</small>
+                </div>
+                <div className="crop-batch-toolbar">
+                  <button type="button" className="secondary" onClick={selectAllSources}>全选</button>
+                  <button type="button" className="secondary" onClick={clearSelectedSources}>清空选择</button>
+                  <button
+                    type="button"
+                    className="dl-btn"
+                    disabled={!selectedCount || isBatchSaving}
+                    onClick={() => void handleBatchDownload()}
+                  >
+                    {isBatchSaving ? '批量保存中...' : '批量下载'}
+                  </button>
                 </div>
                 <div className="crop-source-list">
                   {sources.map(source => (
                     <div key={source.id} className={`crop-source-item ${activeSource?.id === source.id ? 'active' : ''}`}>
+                      <label className="crop-source-check" aria-label={`选择 ${source.fileName}`}>
+                        <input
+                          type="checkbox"
+                          checked={selectedSourceIds.has(source.id)}
+                          onChange={() => toggleSourceSelected(source.id)}
+                        />
+                      </label>
                       <button type="button" className="crop-source-select" onClick={() => setActiveId(source.id)}>
                         <span>{source.fileName}</span>
                         <small>{source.width} × {source.height}px</small>
@@ -351,6 +455,11 @@ function readImageDimensions(file: File) {
 
 function makeTimestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+}
+
+function makeOutputFilename(source: CropMarginSource, templateId: CropMarginTemplateId, timestamp: string, index?: number) {
+  const indexPart = index === undefined ? '' : `_${index}`
+  return `watermark_crop_margin_${sanitizeFilename(source.fileName)}_${templateId}${indexPart}_${timestamp}.png`
 }
 
 function getSavedFileLabel(path: string | undefined, fallback: string) {
