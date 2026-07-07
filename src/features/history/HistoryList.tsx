@@ -1,18 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
 import type { HistoryRecord } from '../../lib/storage'
+import { useEffect, useRef } from 'react'
 import { Icon } from '../../components/Icon'
 import type { CropMarginIncomingImage } from '../crop-margin/types'
 import { HistoryRecordCard } from './HistoryRecordCard'
 
-const HISTORY_PAGE_SIZE = 30
-
 type HistoryListProps = {
   historyRecords: HistoryRecord[]
-  filteredHistory: HistoryRecord[]
-  filterKey: string
+  totalCount: number
+  filteredTotal: number
+  pageSize: number
+  currentPage: number
+  totalPages: number
+  isLoading: boolean
   historyFavoriteFilter: 'all' | 'favorites'
+  favoriteCount: number
+  onPageChange: (page: number) => void
   onRecallHistory: (recordId: number) => void | Promise<void>
-  onRemoveHistory: (recordId: number) => void | Promise<void>
+  onRemoveHistory: (recordId: number, isFavorite?: boolean) => void | Promise<void>
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePendingIds: Record<number, boolean>
   onShowToast: (message: string, type: 'success' | 'error') => void
@@ -22,9 +26,15 @@ type HistoryListProps = {
 export function HistoryList(props: HistoryListProps) {
   const {
     historyRecords,
-    filteredHistory,
-    filterKey,
+    totalCount,
+    filteredTotal,
+    pageSize,
+    currentPage,
+    totalPages,
+    isLoading,
     historyFavoriteFilter,
+    favoriteCount,
+    onPageChange,
     onRecallHistory,
     onRemoveHistory,
     onToggleFavorite,
@@ -32,47 +42,58 @@ export function HistoryList(props: HistoryListProps) {
     onShowToast,
     onSendToCropMargin,
   } = props
-  const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
-  const visibleHistory = useMemo(() => filteredHistory.slice(0, visibleCount), [filteredHistory, visibleCount])
-  const hasMore = visibleHistory.length < filteredHistory.length
-
-  useEffect(() => {
-    setVisibleCount(HISTORY_PAGE_SIZE)
-  }, [filterKey])
-
-  const hasFavoriteRecords = historyRecords.some(record => record.isFavorite)
-  const emptyText = historyRecords.length
-    ? historyFavoriteFilter === 'favorites' && !hasFavoriteRecords
+  const pageStart = filteredTotal ? (currentPage - 1) * pageSize + 1 : 0
+  const pageEnd = Math.min((currentPage - 1) * pageSize + historyRecords.length, filteredTotal)
+  const pageRecordKey = historyRecords.map(record => record.id ?? record.timestamp).join('|')
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const emptyText = totalCount
+    ? historyFavoriteFilter === 'favorites' && !favoriteCount
       ? '暂无收藏记录'
       : historyFavoriteFilter === 'favorites'
         ? '未找到匹配收藏'
         : '未找到匹配记录'
     : '暂无历史记录'
-  const emptyHint = historyRecords.length
-    ? historyFavoriteFilter === 'favorites' && !hasFavoriteRecords
+  const emptyHint = totalCount
+    ? historyFavoriteFilter === 'favorites' && !favoriteCount
       ? '在满意的结果上点击星标，就能在这里快速回看。'
       : historyFavoriteFilter === 'favorites'
         ? '试试调整关键词或模型筛选。'
         : '试试其他关键词、模型组合，或者回到工作台继续生成。'
     : '生成图片后会自动沉淀为可回看的本地资产。'
 
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+  }, [currentPage, pageRecordKey])
+
   return (
     <div className="history-list history-list-page">
-      {!filteredHistory.length
+      {historyRecords.length || filteredTotal > 0
         ? (
-            <div className="empty history-empty-state">
-              <div className="empty-icon"><Icon name="history" size={34} /></div>
-              <div className="empty-text">{emptyText}</div>
-              <div className="empty-hint">{emptyHint}</div>
+            <div className="history-list-window">
+              <span>第 {currentPage} / {totalPages} 页 · {pageStart}-{pageEnd} / {filteredTotal} 条</span>
+              {isLoading ? <span>更新中...</span> : null}
             </div>
           )
-        : (
-            <>
-              <div className="history-list-window">
-                <span>已显示 {visibleHistory.length} / {filteredHistory.length} 条</span>
-                <span>每批 {HISTORY_PAGE_SIZE} 条，减少一次性图片解码压力</span>
+        : null}
+      <div className="history-record-scroll" ref={scrollRef}>
+        {isLoading && !historyRecords.length
+          ? (
+              <div className="empty history-empty-state">
+                <div className="empty-icon"><span className="spinner" /></div>
+                <div className="empty-text">正在加载历史记录</div>
               </div>
-              {visibleHistory.map(record => (
+            )
+          : !historyRecords.length
+              ? (
+                  <div className="empty history-empty-state">
+                    <div className="empty-icon"><Icon name="history" size={34} /></div>
+                    <div className="empty-text">{emptyText}</div>
+                    <div className="empty-hint">{emptyHint}</div>
+                  </div>
+                )
+              : (
+                  <>
+              {historyRecords.map(record => (
                 <HistoryRecordCard
                   key={record.id}
                   record={record}
@@ -84,19 +105,34 @@ export function HistoryList(props: HistoryListProps) {
                   onSendToCropMargin={onSendToCropMargin}
                 />
               ))}
-              {hasMore
-                ? (
-                    <button
-                      type="button"
-                      className="history-load-more"
-                      onClick={() => setVisibleCount(current => current + HISTORY_PAGE_SIZE)}
-                    >
-                      加载更多历史记录
-                    </button>
-                  )
-                : null}
-            </>
-          )}
+                  </>
+                )}
+      </div>
+      {filteredTotal > 0
+        ? (
+            <div className="history-pagination">
+              <button
+                type="button"
+                className="history-page-btn"
+                disabled={isLoading || currentPage <= 1}
+                onClick={() => onPageChange(currentPage - 1)}
+              >
+                <Icon name="chevronLeft" size={16} />
+                上一页
+              </button>
+              <span>第 {currentPage} / {totalPages} 页</span>
+              <button
+                type="button"
+                className="history-page-btn"
+                disabled={isLoading || currentPage >= totalPages}
+                onClick={() => onPageChange(currentPage + 1)}
+              >
+                下一页
+                <Icon name="chevronRight" size={16} />
+              </button>
+            </div>
+          )
+        : null}
     </div>
   )
 }

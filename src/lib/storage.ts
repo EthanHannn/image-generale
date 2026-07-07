@@ -86,10 +86,43 @@ export type HistoryRecord = {
   favoritedAt?: number | null
 }
 
+export type HistoryRecordModeFilter = 'all' | 'gen' | 'edit' | 'upscale'
+
+export type HistoryPageQuery = {
+  search: string
+  modelId: string
+  favoriteOnly: boolean
+  modeFilter: HistoryRecordModeFilter
+  offset: number
+  limit: number
+}
+
+export type HistoryPageResult = {
+  records: HistoryRecord[]
+  totalCount: number
+}
+
+export type HistoryOverview = {
+  totalCount: number
+  totalImages: number
+  favoriteCount: number
+  modelIds: string[]
+  latestRecord: HistoryRecord | null
+}
+
 type DesktopHistoryRecord = Omit<HistoryRecord, 'images' | 'thumbnails'> & {
   imagesBase64: string[]
   thumbnailBase64?: string[]
   upscaleImagesBase64?: Record<string, Record<string, string>>
+}
+
+type DesktopHistoryPageResult = {
+  records: DesktopHistoryRecord[]
+  totalCount: number
+}
+
+type DesktopHistoryOverview = Omit<HistoryOverview, 'latestRecord'> & {
+  latestRecord: DesktopHistoryRecord | null
 }
 
 type DbConfig = {
@@ -322,6 +355,27 @@ function deserializeHistoryRecord(record: DesktopHistoryRecord): HistoryRecord {
     upscaledImages,
     isFavorite: !!record.isFavorite,
     favoritedAt: record.favoritedAt || null,
+  }
+}
+
+function filterHistoryRecords(records: HistoryRecord[], query: HistoryPageQuery) {
+  const search = query.search.trim().toLowerCase()
+  return records.filter((record) => {
+    const hitPrompt = !search || record.prompt.toLowerCase().includes(search)
+    const hitModel = !query.modelId || record.modelId === query.modelId
+    const hitFavorite = !query.favoriteOnly || !!record.isFavorite
+    const hitMode = query.modeFilter === 'all' || record.mode === query.modeFilter
+    return hitPrompt && hitModel && hitFavorite && hitMode
+  })
+}
+
+function getHistoryOverviewFromRecords(records: HistoryRecord[]): HistoryOverview {
+  return {
+    totalCount: records.length,
+    totalImages: records.reduce((sum, record) => sum + (record.imageCount || 0), 0),
+    favoriteCount: records.filter(record => record.isFavorite).length,
+    modelIds: [...new Set(records.map(record => record.modelId))].sort(),
+    latestRecord: records[0] || null,
   }
 }
 
@@ -614,6 +668,47 @@ export function getAllRecords() {
   })
 }
 
+export function getHistoryPage(query: HistoryPageQuery): Promise<HistoryPageResult> {
+  const offset = Math.max(0, query.offset)
+  const limit = Math.max(1, query.limit)
+
+  if (isDesktopApp()) {
+    return invokeDesktop<DesktopHistoryPageResult>('list_history_records_page', {
+      search: query.search || null,
+      modelId: query.modelId || null,
+      favoriteOnly: query.favoriteOnly,
+      modeFilter: query.modeFilter,
+      offset,
+      limit,
+    }).then(result => ({
+      records: (result?.records || []).map(deserializeHistoryRecord),
+      totalCount: result?.totalCount || 0,
+    }))
+  }
+
+  return getAllRecords().then((records) => {
+    const filteredRecords = filterHistoryRecords(records, { ...query, offset, limit })
+    return {
+      records: filteredRecords.slice(offset, offset + limit),
+      totalCount: filteredRecords.length,
+    }
+  })
+}
+
+export function getHistoryOverview(): Promise<HistoryOverview> {
+  if (isDesktopApp()) {
+    return invokeDesktop<DesktopHistoryOverview>('get_history_overview').then((overview) => ({
+      totalCount: overview?.totalCount || 0,
+      totalImages: overview?.totalImages || 0,
+      favoriteCount: overview?.favoriteCount || 0,
+      modelIds: overview?.modelIds || [],
+      latestRecord: overview?.latestRecord ? deserializeHistoryRecord(overview.latestRecord) : null,
+    }))
+  }
+
+  return getAllRecords().then(getHistoryOverviewFromRecords)
+}
+
 export function getRecordsAsc() {
   if (isDesktopApp()) {
     return invokeDesktop<DesktopHistoryRecord[]>('list_history_records', { descending: false })
@@ -688,6 +783,16 @@ export function clearAllRecords() {
     request.onsuccess = () => resolve()
     request.onerror = () => reject(request.error)
   })
+}
+
+export async function deleteUnfavoriteRecords() {
+  if (isDesktopApp())
+    return (await invokeDesktop<number>('clear_unfavorite_history_records')) || 0
+
+  const records = await getAllRecords()
+  const recordsToRemove = records.filter(record => !record.isFavorite)
+  await Promise.all(recordsToRemove.map(record => record.id === undefined ? Promise.resolve() : deleteRecord(record.id)))
+  return recordsToRemove.length
 }
 
 export async function getTotalSize() {

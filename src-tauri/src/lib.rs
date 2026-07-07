@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use rfd::FileDialog;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use std::{
@@ -221,6 +221,23 @@ struct HistoryRecordPayload {
     favorited_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryPagePayload {
+    records: Vec<HistoryRecordPayload>,
+    total_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryOverviewPayload {
+    total_count: i64,
+    total_images: i64,
+    favorite_count: i64,
+    model_ids: Vec<String>,
+    latest_record: Option<HistoryRecordPayload>,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -333,6 +350,7 @@ fn open_history_db(app: &AppHandle) -> Result<Connection, String> {
       );
       CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history_records(timestamp);
       CREATE INDEX IF NOT EXISTS idx_history_model_id ON history_records(model_id);
+      CREATE INDEX IF NOT EXISTS idx_history_mode ON history_records(mode);
       ",
         )
         .map_err(|error| error.to_string())?;
@@ -557,6 +575,49 @@ fn row_to_history_payload(
         is_favorite: is_favorite != 0,
         favorited_at: row.get("favorited_at").map_err(|error| error.to_string())?,
     })
+}
+
+fn history_query_parts(
+    search: Option<String>,
+    model_id: Option<String>,
+    favorite_only: bool,
+    mode_filter: Option<String>,
+) -> (String, Vec<Value>) {
+    let mut conditions: Vec<String> = Vec::new();
+    let mut values: Vec<Value> = Vec::new();
+
+    if let Some(search) = search.map(|value| value.trim().to_string()) {
+        if !search.is_empty() {
+            conditions.push("prompt LIKE ? COLLATE NOCASE".to_string());
+            values.push(Value::Text(format!("%{}%", search)));
+        }
+    }
+
+    if let Some(model_id) = model_id.map(|value| value.trim().to_string()) {
+        if !model_id.is_empty() {
+            conditions.push("model_id = ?".to_string());
+            values.push(Value::Text(model_id));
+        }
+    }
+
+    if favorite_only {
+        conditions.push("is_favorite = 1".to_string());
+    }
+
+    if let Some(mode_filter) = mode_filter.map(|value| value.trim().to_string()) {
+        if !mode_filter.is_empty() && mode_filter != "all" {
+            conditions.push("mode = ?".to_string());
+            values.push(Value::Text(mode_filter));
+        }
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+
+    (where_clause, values)
 }
 
 #[tauri::command]
@@ -964,6 +1025,106 @@ fn list_history_records(
 }
 
 #[tauri::command]
+fn list_history_records_page(
+    app: AppHandle,
+    search: Option<String>,
+    model_id: Option<String>,
+    favorite_only: bool,
+    mode_filter: Option<String>,
+    offset: i64,
+    limit: i64,
+) -> Result<HistoryPagePayload, String> {
+    let connection = open_history_db(&app)?;
+    let safe_offset = offset.max(0);
+    let safe_limit = limit.clamp(1, 100);
+    let (where_clause, query_values) =
+        history_query_parts(search, model_id, favorite_only, mode_filter);
+    let total_sql = format!("SELECT COUNT(*) FROM history_records{}", where_clause);
+    let total_count = connection
+        .query_row(
+            &total_sql,
+            params_from_iter(query_values.iter()),
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+
+    let mut page_values = query_values.clone();
+    page_values.push(Value::Integer(safe_limit));
+    page_values.push(Value::Integer(safe_offset));
+    let page_sql = format!(
+        "SELECT * FROM history_records{} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        where_clause
+    );
+    let mut statement = connection
+        .prepare(&page_sql)
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params_from_iter(page_values.iter()), |row| {
+            Ok(row_to_history_payload(&app, row, false))
+        })
+        .map_err(|error| error.to_string())?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(|error| error.to_string())??);
+    }
+
+    Ok(HistoryPagePayload {
+        records,
+        total_count,
+    })
+}
+
+#[tauri::command]
+fn get_history_overview(app: AppHandle) -> Result<HistoryOverviewPayload, String> {
+    let connection = open_history_db(&app)?;
+    let (total_count, total_images, favorite_count): (i64, i64, i64) = connection
+        .query_row(
+            "
+            SELECT
+              COUNT(*),
+              COALESCE(SUM(image_count), 0),
+              COALESCE(SUM(CASE WHEN is_favorite = 1 THEN 1 ELSE 0 END), 0)
+            FROM history_records
+            ",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| error.to_string())?;
+
+    let mut model_statement = connection
+        .prepare("SELECT DISTINCT model_id FROM history_records ORDER BY model_id ASC")
+        .map_err(|error| error.to_string())?;
+    let model_rows = model_statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let mut model_ids = Vec::new();
+    for row in model_rows {
+        model_ids.push(row.map_err(|error| error.to_string())?);
+    }
+
+    let mut latest_statement = connection
+        .prepare("SELECT * FROM history_records ORDER BY timestamp DESC LIMIT 1")
+        .map_err(|error| error.to_string())?;
+    let mut latest_rows = latest_statement
+        .query([])
+        .map_err(|error| error.to_string())?;
+    let latest_record = if let Some(row) = latest_rows.next().map_err(|error| error.to_string())? {
+        Some(row_to_history_payload(&app, row, false)?)
+    } else {
+        None
+    };
+
+    Ok(HistoryOverviewPayload {
+        total_count,
+        total_images,
+        favorite_count,
+        model_ids,
+        latest_record,
+    })
+}
+
+#[tauri::command]
 fn get_history_record(app: AppHandle, id: i64) -> Result<Option<HistoryRecordPayload>, String> {
     let connection = open_history_db(&app)?;
     let mut statement = connection
@@ -1029,6 +1190,30 @@ fn clear_history_records(app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+fn clear_unfavorite_history_records(app: AppHandle) -> Result<i64, String> {
+    let connection = open_history_db(&app)?;
+    let mut statement = connection
+        .prepare("SELECT id FROM history_records WHERE is_favorite = 0")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| error.to_string())?;
+    let mut ids = Vec::new();
+    for row in rows {
+        ids.push(row.map_err(|error| error.to_string())?);
+    }
+    drop(statement);
+    drop(connection);
+
+    let deleted_count = ids.len() as i64;
+    for id in ids {
+        delete_history_record(app.clone(), id)?;
+    }
+
+    Ok(deleted_count)
 }
 
 #[tauri::command]
@@ -1765,9 +1950,12 @@ pub fn run() {
             save_history_upscale_variant,
             save_history_thumbnails,
             list_history_records,
+            list_history_records_page,
+            get_history_overview,
             get_history_record,
             delete_history_record,
             clear_history_records,
+            clear_unfavorite_history_records,
             get_history_storage_usage,
             enforce_history_storage_limit,
             aliyun_upscale

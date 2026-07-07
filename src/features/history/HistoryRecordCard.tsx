@@ -19,7 +19,7 @@ type HistoryContextMenuState = {
 type HistoryRecordCardProps = {
   record: HistoryRecord
   onRecallHistory: (recordId: number) => void | Promise<void>
-  onRemoveHistory: (recordId: number) => void | Promise<void>
+  onRemoveHistory: (recordId: number, isFavorite?: boolean) => void | Promise<void>
   onToggleFavorite: (recordId: number, nextFavorite: boolean) => void | Promise<void>
   favoritePending: boolean
   onShowToast: (message: string, type: 'success' | 'error') => void
@@ -359,7 +359,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
       <div className="card-actions history-card-actions" onClick={event => event.stopPropagation()}>
         <button className="history-action-btn primary-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>{record.mode === 'upscale' ? '回显到超分台' : '回显到工作台'}</button>
         <button className="history-action-btn" type="button" disabled={!canUseRecordImages} onClick={() => void sendRecordToCropMargin()}>发送到裁剪台</button>
-        <button className="history-action-btn delete-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id)}>删除记录</button>
+        <button className="history-action-btn delete-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id, record.isFavorite)}>删除记录</button>
       </div>
       {hasPreview
         ? createPortal(

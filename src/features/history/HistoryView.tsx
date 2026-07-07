@@ -1,11 +1,15 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatSize } from '../../lib/utils'
-import type { HistoryRecord, HistoryStoragePolicy } from '../../lib/storage'
+import { getHistoryPage, type HistoryOverview, type HistoryPageQuery, type HistoryRecord, type HistoryStoragePolicy } from '../../lib/storage'
 import type { CropMarginIncomingImage } from '../crop-margin/types'
 import { HistoryList } from './HistoryList'
 import { HistoryToolbar } from './HistoryToolbar'
 
+const HISTORY_PAGE_SIZE = 10
+
 type HistoryViewProps = {
-  historyRecords: HistoryRecord[]
+  historyOverview: HistoryOverview
+  historyVersion: number
   historySearch: string
   historyModelFilter: string
   historyFavoriteFilter: 'all' | 'favorites'
@@ -27,7 +31,8 @@ type HistoryViewProps = {
 
 export function HistoryView(props: HistoryViewProps) {
   const {
-    historyRecords,
+    historyOverview,
+    historyVersion,
     historySearch,
     historyModelFilter,
     historyFavoriteFilter,
@@ -46,20 +51,75 @@ export function HistoryView(props: HistoryViewProps) {
     onShowToast,
     onSendToCropMargin,
   } = props
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([])
+  const [filteredTotal, setFilteredTotal] = useState(0)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageLoading, setPageLoading] = useState(false)
+  const filterKeyRef = useRef('')
 
   const hasStorageLimit = storagePolicy.limitMode === 'limited' && !!storagePolicy.limitBytes
   const storagePercent = hasStorageLimit ? Math.min((storageUsed / storagePolicy.limitBytes!) * 100, 100) : 0
-  const modelFilterOptions = [...new Set(historyRecords.map(record => record.modelId))].sort()
-  const favoriteCount = historyRecords.filter(record => record.isFavorite).length
-  const filteredHistory = historyRecords.filter((record) => {
-    const hitPrompt = !historySearch || record.prompt.toLowerCase().includes(historySearch.toLowerCase())
-    const hitModel = !historyModelFilter || record.modelId === historyModelFilter
-    const hitFavorite = historyFavoriteFilter === 'all' || !!record.isFavorite
-    const hitMode = historyModeFilter === 'all' || record.mode === historyModeFilter
-    return hitPrompt && hitModel && hitFavorite && hitMode
-  })
-  const latestRecord = historyRecords[0]
-  const totalImages = historyRecords.reduce((sum, record) => sum + record.imageCount, 0)
+  const modelFilterOptions = historyOverview.modelIds
+  const favoriteCount = historyOverview.favoriteCount
+  const latestRecord = historyOverview.latestRecord
+  const totalImages = historyOverview.totalImages
+  const filterKey = `${historySearch}|${historyModelFilter}|${historyFavoriteFilter}|${historyModeFilter}`
+  const totalPages = Math.max(1, Math.ceil(filteredTotal / HISTORY_PAGE_SIZE))
+  const historyQuery = useMemo<HistoryPageQuery>(() => ({
+    search: historySearch,
+    modelId: historyModelFilter,
+    favoriteOnly: historyFavoriteFilter === 'favorites',
+    modeFilter: historyModeFilter,
+    offset: (currentPage - 1) * HISTORY_PAGE_SIZE,
+    limit: HISTORY_PAGE_SIZE,
+  }), [currentPage, historyFavoriteFilter, historyModeFilter, historyModelFilter, historySearch])
+
+  useEffect(() => {
+    let cancelled = false
+    if (filterKeyRef.current !== filterKey) {
+      filterKeyRef.current = filterKey
+      if (currentPage !== 1) {
+        setCurrentPage(1)
+        return () => {
+          cancelled = true
+        }
+      }
+    }
+
+    setPageLoading(true)
+    void getHistoryPage(historyQuery)
+      .then((result) => {
+        if (cancelled)
+          return
+        const nextTotalPages = Math.max(1, Math.ceil(result.totalCount / HISTORY_PAGE_SIZE))
+        if (currentPage > nextTotalPages) {
+          setCurrentPage(nextTotalPages)
+          return
+        }
+        setHistoryRecords(result.records)
+        setFilteredTotal(result.totalCount)
+      })
+      .catch(() => {
+        if (cancelled)
+          return
+        setHistoryRecords([])
+        setFilteredTotal(0)
+      })
+      .finally(() => {
+        if (!cancelled)
+          setPageLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentPage, filterKey, historyQuery, historyVersion])
+
+  function changeHistoryPage(page: number) {
+    if (pageLoading)
+      return
+    setCurrentPage(Math.min(Math.max(page, 1), totalPages))
+  }
 
   return (
     <div className="view-panel-group">
@@ -70,7 +130,7 @@ export function HistoryView(props: HistoryViewProps) {
             <div className="panel-caption">集中浏览本地历史结果，支持搜索、筛选、回显与清理。</div>
           </div>
           <div className="result-meta-badge">
-            <span>{historyRecords.length} 条</span>
+            <span>{historyOverview.totalCount} 条</span>
             <span>{formatSize(storageUsed)}</span>
           </div>
         </div>
@@ -94,7 +154,7 @@ export function HistoryView(props: HistoryViewProps) {
         <div className="history-overview-grid">
           <div className="history-overview-card">
             <span className="history-overview-label">历史资产</span>
-            <strong>{historyRecords.length}</strong>
+            <strong>{historyOverview.totalCount}</strong>
             <span className="history-overview-copy">当前已归档 {totalImages} 张图片，支持回显与二次筛选。</span>
           </div>
           <div className="history-overview-card">
@@ -132,9 +192,15 @@ export function HistoryView(props: HistoryViewProps) {
         />
         <HistoryList
           historyRecords={historyRecords}
-          filteredHistory={filteredHistory}
-          filterKey={`${historySearch}|${historyModelFilter}|${historyFavoriteFilter}|${historyModeFilter}`}
+          totalCount={historyOverview.totalCount}
+          filteredTotal={filteredTotal}
+          pageSize={HISTORY_PAGE_SIZE}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          isLoading={pageLoading}
           historyFavoriteFilter={historyFavoriteFilter}
+          favoriteCount={favoriteCount}
+          onPageChange={changeHistoryPage}
           onRecallHistory={onRecallHistory}
           onRemoveHistory={onRemoveHistory}
           onToggleFavorite={onToggleFavorite}

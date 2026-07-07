@@ -11,8 +11,9 @@ import {
   DEFAULT_HISTORY_STORAGE_POLICY,
   addRecord,
   deleteRecord,
+  deleteUnfavoriteRecords,
   enforceStorageLimit,
-  getAllRecords,
+  getHistoryOverview,
   getRecord,
   getTotalSize,
   loadAppConfig,
@@ -30,6 +31,7 @@ import {
   upscaleProviderToConfig,
   THEME_KEY,
   type HistoryStoragePolicy,
+  type HistoryOverview,
   type HistoryRecord,
   type ProviderConfig,
   type RequestParams,
@@ -183,6 +185,14 @@ const defaultStandaloneUpscaleState: StandaloneUpscaleState = {
   completedFactors: {},
 }
 
+const defaultHistoryOverview: HistoryOverview = {
+  totalCount: 0,
+  totalImages: 0,
+  favoriteCount: 0,
+  modelIds: [],
+  latestRecord: null,
+}
+
 const defaultTargetSize: TargetSizeState = {
   mode: 'ratio',
   ratioText: '1:1',
@@ -270,7 +280,9 @@ export default function App() {
   const [autoUpscalingIndexes, setAutoUpscalingIndexes] = useState<Record<number, boolean>>({})
   const [standaloneUpscale, setStandaloneUpscale] = useState<StandaloneUpscaleState>(defaultStandaloneUpscaleState)
 
-  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([])
+  const [historyOverview, setHistoryOverview] = useState<HistoryOverview>(defaultHistoryOverview)
+  const [historyVersion, setHistoryVersion] = useState(0)
+  const [historyRecordCache, setHistoryRecordCache] = useState<Record<number, HistoryRecord>>({})
   const [historySearch, setHistorySearch] = useState('')
   const [historyModelFilter, setHistoryModelFilter] = useState('')
   const [historyFavoriteFilter, setHistoryFavoriteFilter] = useState<HistoryFavoriteFilter>('all')
@@ -301,11 +313,11 @@ export default function App() {
   const currentModel = models.find(model => model.id === currentModelId) || null
   const activeHistoryRecord = activeHistoryRecordId === null
     ? null
-    : historyRecords.find(record => record.id === activeHistoryRecordId) || null
+    : historyRecordCache[activeHistoryRecordId] || null
   const activeFavoritePending = activeHistoryRecordId === null ? false : !!favoritePendingIds[activeHistoryRecordId]
   const standaloneActiveRecord = standaloneUpscale.activeRecordId === null
     ? null
-    : historyRecords.find(record => record.id === standaloneUpscale.activeRecordId) || null
+    : historyRecordCache[standaloneUpscale.activeRecordId] || null
   const standaloneFavoritePending = standaloneUpscale.activeRecordId === null ? false : !!favoritePendingIds[standaloneUpscale.activeRecordId]
   const resolutionOptions = currentModel?.supportedResolutions || []
   const sizePlanResult = createSizePlan(targetSize)
@@ -505,9 +517,10 @@ export default function App() {
   }
 
   async function refreshHistory() {
-    const records = await getAllRecords()
-    setHistoryRecords(records)
-    setStorageUsed(await getTotalSize())
+    const [overview, totalSize] = await Promise.all([getHistoryOverview(), getTotalSize()])
+    setHistoryOverview(overview)
+    setStorageUsed(totalSize)
+    setHistoryVersion(current => current + 1)
   }
 
   function resetModelState() {
@@ -1703,7 +1716,7 @@ export default function App() {
       autoUpscaleFactor: plan.autoUpscaleFactor || undefined,
     }
 
-    const recordId = await addRecord({
+    const nextRecord: HistoryRecord = {
       timestamp: Date.now(),
       providerId: currentProvider.id,
       providerName: currentProvider.name,
@@ -1719,8 +1732,11 @@ export default function App() {
       totalSize: totalSize + JSON.stringify(nextParams).length + requestPrompt.length,
       isFavorite: false,
       favoritedAt: null,
-    })
+    }
+    const recordId = await addRecord(nextRecord)
     setActiveHistoryRecordId(recordId || null)
+    if (recordId !== null)
+      setHistoryRecordCache(current => ({ ...current, [recordId]: { ...nextRecord, id: recordId } }))
 
     await applyStorageCleanup(historyStoragePolicy, true)
     await refreshHistory()
@@ -2174,7 +2190,7 @@ export default function App() {
       }
       const outputBlob = base64ToBlob(out.imageBase64)
       const sourceBlob = base64ToBlob(standaloneUpscale.sourceBase64)
-      const recordId = await addRecord({
+      const nextRecord: HistoryRecord = {
         timestamp: Date.now(),
         providerId: currentUpscaleProvider?.id || 'upscale',
         providerName: currentUpscaleProvider?.name || '超分服务',
@@ -2209,7 +2225,10 @@ export default function App() {
         },
         isFavorite: false,
         favoritedAt: null,
-      })
+      }
+      const recordId = await addRecord(nextRecord)
+      if (recordId !== null)
+        setHistoryRecordCache(current => ({ ...current, [recordId]: { ...nextRecord, id: recordId } }))
       if (recordId !== null)
         await saveHistoryUpscaleVariant(recordId, 0, standaloneUpscale.factor, out.imageBase64, out.localPath)
       await applyStorageCleanup(historyStoragePolicy, true)
@@ -2271,6 +2290,9 @@ export default function App() {
       showToast('记录不存在', 'error')
       return
     }
+    const recalledRecordId = record.id
+    if (recalledRecordId !== undefined)
+      setHistoryRecordCache(current => ({ ...current, [recalledRecordId]: record }))
 
     if (record.mode === 'upscale') {
       const sourceBlob = record.images?.[0]
@@ -2368,18 +2390,19 @@ export default function App() {
 
   async function toggleHistoryFavorite(recordId: number, nextFavorite: boolean) {
     const favoritedAt = nextFavorite ? Date.now() : null
-    const previousRecords = historyRecords
+    const previousCache = historyRecordCache
     setFavoritePendingIds(current => ({ ...current, [recordId]: true }))
-    setHistoryRecords(current => current.map(record => record.id === recordId
-      ? { ...record, isFavorite: nextFavorite, favoritedAt }
-      : record))
+    setHistoryRecordCache(current => current[recordId]
+      ? { ...current, [recordId]: { ...current[recordId], isFavorite: nextFavorite, favoritedAt } }
+      : current)
 
     try {
       await setRecordFavorite(recordId, nextFavorite)
+      await refreshHistory()
       showToast(nextFavorite ? '已收藏该记录' : '已取消收藏', 'success')
     }
     catch (error) {
-      setHistoryRecords(previousRecords)
+      setHistoryRecordCache(previousCache)
       showToast(`更新收藏失败: ${getErrorMessage(error)}`, 'error')
     }
     finally {
@@ -2391,37 +2414,47 @@ export default function App() {
     }
   }
 
-  async function removeHistory(recordId: number) {
-    const record = historyRecords.find(item => item.id === recordId)
-    if (record?.isFavorite && !window.confirm('该记录已收藏，确定仍要删除吗？此操作不可撤销。'))
+  async function removeHistory(recordId: number, isFavorite?: boolean) {
+    const record = historyRecordCache[recordId]
+    if ((isFavorite ?? record?.isFavorite) && !window.confirm('该记录已收藏，确定仍要删除吗？此操作不可撤销。'))
       return
 
     await deleteRecord(recordId)
     if (activeHistoryRecordId === recordId)
       setActiveHistoryRecordId(null)
+    if (standaloneUpscale.activeRecordId === recordId)
+      setStandaloneUpscale(current => ({ ...current, activeRecordId: null }))
+    setHistoryRecordCache((current) => {
+      const next = { ...current }
+      delete next[recordId]
+      return next
+    })
     await refreshHistory()
     showToast('已删除该记录', 'success')
   }
 
   async function clearHistory() {
-    if (!historyRecords.length) {
+    if (!historyOverview.totalCount) {
       showToast('没有可清空的记录', 'error')
       return
     }
-    const recordsToRemove = historyRecords.filter(record => !record.isFavorite)
-    const protectedCount = historyRecords.length - recordsToRemove.length
-    if (!recordsToRemove.length) {
+    const recordsToRemove = historyOverview.totalCount - historyOverview.favoriteCount
+    const protectedCount = historyOverview.favoriteCount
+    if (!recordsToRemove) {
       showToast('没有可清理的未收藏记录', 'error')
       return
     }
     const confirmText = protectedCount
-      ? `确定要清理 ${recordsToRemove.length} 条未收藏记录吗？${protectedCount} 条收藏记录会保留。`
-      : `确定要清理全部 ${recordsToRemove.length} 条历史记录吗？此操作不可撤销。`
+      ? `确定要清理 ${recordsToRemove} 条未收藏记录吗？${protectedCount} 条收藏记录会保留。`
+      : `确定要清理全部 ${recordsToRemove} 条历史记录吗？此操作不可撤销。`
     if (!window.confirm(confirmText))
       return
-    await Promise.all(recordsToRemove.map(record => record.id === undefined ? Promise.resolve() : deleteRecord(record.id)))
-    if (activeHistoryRecordId !== null && recordsToRemove.some(record => record.id === activeHistoryRecordId))
+    await deleteUnfavoriteRecords()
+    if (activeHistoryRecordId !== null && !historyRecordCache[activeHistoryRecordId]?.isFavorite)
       setActiveHistoryRecordId(null)
+    if (standaloneUpscale.activeRecordId !== null && !historyRecordCache[standaloneUpscale.activeRecordId]?.isFavorite)
+      setStandaloneUpscale(current => ({ ...current, activeRecordId: null }))
+    setHistoryRecordCache(current => Object.fromEntries(Object.entries(current).filter(([, record]) => record.isFavorite)))
     await refreshHistory()
     showToast(protectedCount ? '已清理未收藏记录，收藏记录已保留' : '已清理历史记录', 'success')
   }
@@ -3542,7 +3575,8 @@ export default function App() {
             {view === 'history'
               ? (
                   <HistoryView
-                    historyRecords={historyRecords}
+                    historyOverview={historyOverview}
+                    historyVersion={historyVersion}
                     historySearch={historySearch}
                     historyModelFilter={historyModelFilter}
                     historyFavoriteFilter={historyFavoriteFilter}
