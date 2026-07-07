@@ -2555,10 +2555,10 @@ export default function App() {
                 </select>
               </div>
               <div>
-                <label htmlFor="promptSizeHint">尺寸入词</label>
+                <label htmlFor="promptSizeHint">尺寸加入 Prompt</label>
                 <select id="promptSizeHint" value={params.promptSizeHint || 'false'} onChange={event => setParams(current => ({ ...current, promptSizeHint: event.target.value }))}>
-                  <option value="false">false</option>
-                  <option value="true">true</option>
+                  <option value="false">不添加</option>
+                  <option value="true">添加</option>
                 </select>
               </div>
               <div>
@@ -4099,7 +4099,7 @@ function makeRequestPrompt(prompt: string, plan: SizePlan, targetSize: TargetSiz
   const ratioText = targetSize.mode === 'ratio' && parseRatio(targetSize.ratioText)
     ? targetSize.ratioText.trim()
     : ''
-  const suffix = [ratioText, `${plan.generationWidth} ${plan.generationHeight}`].filter(Boolean).join(', ')
+  const suffix = [ratioText, `${plan.generationWidth}x${plan.generationHeight}`].filter(Boolean).join(', ')
   if (!suffix || prompt.endsWith(suffix))
     return prompt
 
