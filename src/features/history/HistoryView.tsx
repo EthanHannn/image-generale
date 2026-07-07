@@ -133,6 +133,7 @@ export function HistoryView(props: HistoryViewProps) {
         <HistoryList
           historyRecords={historyRecords}
           filteredHistory={filteredHistory}
+          filterKey={`${historySearch}|${historyModelFilter}|${historyFavoriteFilter}|${historyModeFilter}`}
           historyFavoriteFilter={historyFavoriteFilter}
           onRecallHistory={onRecallHistory}
           onRemoveHistory={onRemoveHistory}

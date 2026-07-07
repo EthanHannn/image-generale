@@ -207,6 +207,8 @@ struct HistoryRecordPayload {
     prompt: String,
     params: RequestParams,
     images_base64: Vec<String>,
+    #[serde(default)]
+    thumbnail_base64: Vec<String>,
     image_count: i64,
     duration: String,
     request_json: String,
@@ -277,6 +279,15 @@ fn history_images_dir(app: &AppHandle, timestamp: i64) -> Result<PathBuf, String
     Ok(dir)
 }
 
+fn history_thumbnails_dir(app: &AppHandle, timestamp: i64) -> Result<PathBuf, String> {
+    let seconds = if timestamp > 0 { timestamp / 1000 } else { 0 };
+    let bucket = 60 * 60 * 24 * 30;
+    let month_key = format!("month-{}", seconds / bucket);
+    let dir = history_root_dir(app)?.join("thumbnails").join(month_key);
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
 fn directory_size(path: &Path) -> Result<i64, String> {
     if !path.exists() {
         return Ok(0);
@@ -328,6 +339,10 @@ fn open_history_db(app: &AppHandle) -> Result<Connection, String> {
     add_history_column(
         &connection,
         "ALTER TABLE history_records ADD COLUMN upscale_images_json TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    add_history_column(
+        &connection,
+        "ALTER TABLE history_records ADD COLUMN thumbnails_json TEXT NOT NULL DEFAULT '[]'",
     )?;
     add_history_column(
         &connection,
@@ -452,6 +467,23 @@ fn read_history_images(app: &AppHandle, images_json: &str) -> Result<Vec<String>
     Ok(images_base64)
 }
 
+fn read_history_thumbnails(app: &AppHandle, thumbnails_json: &str) -> Result<Vec<String>, String> {
+    let relative_paths: Vec<String> = serde_json::from_str(thumbnails_json).unwrap_or_default();
+    let root_dir = history_root_dir(app)?;
+    let mut thumbnails_base64 = Vec::with_capacity(relative_paths.len());
+
+    for relative_path in relative_paths {
+        let absolute_path = root_dir.join(relative_path);
+        if !absolute_path.exists() {
+            continue;
+        }
+        let bytes = fs::read(&absolute_path).map_err(|error| error.to_string())?;
+        thumbnails_base64.push(STANDARD.encode(bytes));
+    }
+
+    Ok(thumbnails_base64)
+}
+
 fn read_upscale_images(
     app: &AppHandle,
     upscale_images_json: &str,
@@ -477,16 +509,29 @@ fn read_upscale_images(
 fn row_to_history_payload(
     app: &AppHandle,
     row: &rusqlite::Row<'_>,
+    include_images: bool,
 ) -> Result<HistoryRecordPayload, String> {
     let params_json: String = row.get("params_json").map_err(|error| error.to_string())?;
     let images_json: String = row.get("images_json").map_err(|error| error.to_string())?;
+    let thumbnails_json: String = row
+        .get("thumbnails_json")
+        .map_err(|error| error.to_string())?;
     let upscale_images_json: String = row
         .get("upscale_images_json")
         .map_err(|error| error.to_string())?;
     let params =
         serde_json::from_str::<RequestParams>(&params_json).map_err(|error| error.to_string())?;
-    let images_base64 = read_history_images(app, &images_json)?;
-    let upscale_images_base64 = read_upscale_images(app, &upscale_images_json)?;
+    let images_base64 = if include_images {
+        read_history_images(app, &images_json)?
+    } else {
+        Vec::new()
+    };
+    let thumbnail_base64 = read_history_thumbnails(app, &thumbnails_json)?;
+    let upscale_images_base64 = if include_images {
+        read_upscale_images(app, &upscale_images_json)?
+    } else {
+        BTreeMap::new()
+    };
 
     let is_favorite: i64 = row.get("is_favorite").map_err(|error| error.to_string())?;
 
@@ -503,6 +548,7 @@ fn row_to_history_payload(
         prompt: row.get("prompt").map_err(|error| error.to_string())?,
         params,
         images_base64,
+        thumbnail_base64,
         image_count: row.get("image_count").map_err(|error| error.to_string())?,
         duration: row.get("duration").map_err(|error| error.to_string())?,
         request_json: row.get("request_json").map_err(|error| error.to_string())?,
@@ -846,6 +892,53 @@ fn save_history_upscale_variant(
 }
 
 #[tauri::command]
+fn save_history_thumbnails(
+    app: AppHandle,
+    record_id: i64,
+    thumbnails_base64: Vec<String>,
+) -> Result<(), String> {
+    let connection = open_history_db(&app)?;
+    let (timestamp, thumbnails_json): (i64, String) = connection
+        .query_row(
+            "SELECT timestamp, thumbnails_json FROM history_records WHERE id = ? LIMIT 1",
+            params![record_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "历史记录不存在".to_string())?;
+
+    let previous_paths: Vec<String> = serde_json::from_str(&thumbnails_json).unwrap_or_default();
+    let thumbnail_dir = history_thumbnails_dir(&app, timestamp)?;
+    let dir_name = thumbnail_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("default");
+    let token = now_millis();
+    let mut relative_paths = Vec::with_capacity(thumbnails_base64.len());
+
+    for (index, thumbnail_base64) in thumbnails_base64.iter().enumerate() {
+        let bytes = STANDARD
+            .decode(thumbnail_base64)
+            .map_err(|error| error.to_string())?;
+        let file_name = format!("{}_{}_thumb_{}.webp", timestamp, token, index + 1);
+        fs::write(thumbnail_dir.join(&file_name), bytes).map_err(|error| error.to_string())?;
+        relative_paths.push(format!("thumbnails/{}/{}", dir_name, file_name).replace('\\', "/"));
+    }
+
+    let next_json = serde_json::to_string(&relative_paths).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE history_records SET thumbnails_json = ? WHERE id = ?",
+            params![next_json, record_id],
+        )
+        .map_err(|error| error.to_string())?;
+
+    delete_relative_paths(&app, previous_paths)?;
+    Ok(())
+}
+
+#[tauri::command]
 fn list_history_records(
     app: AppHandle,
     descending: bool,
@@ -860,7 +953,7 @@ fn list_history_records(
         .map_err(|error| error.to_string())?;
 
     let rows = statement
-        .query_map([], |row| Ok(row_to_history_payload(&app, row)))
+        .query_map([], |row| Ok(row_to_history_payload(&app, row, false)))
         .map_err(|error| error.to_string())?;
 
     let mut records = Vec::new();
@@ -881,7 +974,7 @@ fn get_history_record(app: AppHandle, id: i64) -> Result<Option<HistoryRecordPay
         .query(params![id])
         .map_err(|error| error.to_string())?;
     if let Some(row) = rows.next().map_err(|error| error.to_string())? {
-        return Ok(Some(row_to_history_payload(&app, row)?));
+        return Ok(Some(row_to_history_payload(&app, row, true)?));
     }
 
     Ok(None)
@@ -892,12 +985,16 @@ fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
     let connection = open_history_db(&app)?;
     let mut statement = connection
         .prepare(
-            "SELECT images_json, upscale_images_json FROM history_records WHERE id = ? LIMIT 1",
+            "SELECT images_json, upscale_images_json, thumbnails_json FROM history_records WHERE id = ? LIMIT 1",
         )
         .map_err(|error| error.to_string())?;
     let paths_json = statement
         .query_row(params![id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })
         .optional()
         .map_err(|error| error.to_string())?;
@@ -906,9 +1003,10 @@ fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
         .execute("DELETE FROM history_records WHERE id = ?", params![id])
         .map_err(|error| error.to_string())?;
 
-    if let Some((images_json, upscale_images_json)) = paths_json {
+    if let Some((images_json, upscale_images_json, thumbnails_json)) = paths_json {
         delete_history_images(&app, &images_json)?;
         delete_relative_paths(&app, upscale_paths_from_json(&upscale_images_json))?;
+        delete_relative_paths(&app, serde_json::from_str(&thumbnails_json).unwrap_or_default())?;
     }
 
     Ok(())
@@ -920,6 +1018,10 @@ fn clear_history_records(app: AppHandle) -> Result<(), String> {
     let images_dir = history_root_dir(&app)?.join("images");
     if images_dir.exists() {
         fs::remove_dir_all(&images_dir).map_err(|error| error.to_string())?;
+    }
+    let thumbnails_dir = history_root_dir(&app)?.join("thumbnails");
+    if thumbnails_dir.exists() {
+        fs::remove_dir_all(&thumbnails_dir).map_err(|error| error.to_string())?;
     }
 
     connection
@@ -1661,6 +1763,7 @@ pub fn run() {
             add_history_record,
             set_history_record_favorite,
             save_history_upscale_variant,
+            save_history_thumbnails,
             list_history_records,
             get_history_record,
             delete_history_record,

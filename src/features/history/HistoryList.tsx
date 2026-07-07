@@ -1,11 +1,15 @@
+import { useEffect, useMemo, useState } from 'react'
 import type { HistoryRecord } from '../../lib/storage'
 import { Icon } from '../../components/Icon'
 import type { CropMarginIncomingImage } from '../crop-margin/types'
 import { HistoryRecordCard } from './HistoryRecordCard'
 
+const HISTORY_PAGE_SIZE = 30
+
 type HistoryListProps = {
   historyRecords: HistoryRecord[]
   filteredHistory: HistoryRecord[]
+  filterKey: string
   historyFavoriteFilter: 'all' | 'favorites'
   onRecallHistory: (recordId: number) => void | Promise<void>
   onRemoveHistory: (recordId: number) => void | Promise<void>
@@ -19,6 +23,7 @@ export function HistoryList(props: HistoryListProps) {
   const {
     historyRecords,
     filteredHistory,
+    filterKey,
     historyFavoriteFilter,
     onRecallHistory,
     onRemoveHistory,
@@ -27,6 +32,14 @@ export function HistoryList(props: HistoryListProps) {
     onShowToast,
     onSendToCropMargin,
   } = props
+  const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
+  const visibleHistory = useMemo(() => filteredHistory.slice(0, visibleCount), [filteredHistory, visibleCount])
+  const hasMore = visibleHistory.length < filteredHistory.length
+
+  useEffect(() => {
+    setVisibleCount(HISTORY_PAGE_SIZE)
+  }, [filterKey])
+
   const hasFavoriteRecords = historyRecords.some(record => record.isFavorite)
   const emptyText = historyRecords.length
     ? historyFavoriteFilter === 'favorites' && !hasFavoriteRecords
@@ -53,18 +66,37 @@ export function HistoryList(props: HistoryListProps) {
               <div className="empty-hint">{emptyHint}</div>
             </div>
           )
-        : filteredHistory.map(record => (
-            <HistoryRecordCard
-              key={record.id}
-              record={record}
-              onRecallHistory={onRecallHistory}
-              onRemoveHistory={onRemoveHistory}
-              onToggleFavorite={onToggleFavorite}
-              favoritePending={record.id === undefined ? false : !!favoritePendingIds[record.id]}
-              onShowToast={onShowToast}
-              onSendToCropMargin={onSendToCropMargin}
-            />
-          ))}
+        : (
+            <>
+              <div className="history-list-window">
+                <span>已显示 {visibleHistory.length} / {filteredHistory.length} 条</span>
+                <span>每批 {HISTORY_PAGE_SIZE} 条，减少一次性图片解码压力</span>
+              </div>
+              {visibleHistory.map(record => (
+                <HistoryRecordCard
+                  key={record.id}
+                  record={record}
+                  onRecallHistory={onRecallHistory}
+                  onRemoveHistory={onRemoveHistory}
+                  onToggleFavorite={onToggleFavorite}
+                  favoritePending={record.id === undefined ? false : !!favoritePendingIds[record.id]}
+                  onShowToast={onShowToast}
+                  onSendToCropMargin={onSendToCropMargin}
+                />
+              ))}
+              {hasMore
+                ? (
+                    <button
+                      type="button"
+                      className="history-load-more"
+                      onClick={() => setVisibleCount(current => current + HISTORY_PAGE_SIZE)}
+                    >
+                      加载更多历史记录
+                    </button>
+                  )
+                : null}
+            </>
+          )}
     </div>
   )
 }

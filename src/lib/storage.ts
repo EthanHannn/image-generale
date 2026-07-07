@@ -80,13 +80,15 @@ export type HistoryRecord = {
   duration: string
   requestJson: string
   totalSize: number
+  thumbnails?: Blob[]
   upscaledImages?: Record<number, Record<number, Blob>>
   isFavorite?: boolean
   favoritedAt?: number | null
 }
 
-type DesktopHistoryRecord = Omit<HistoryRecord, 'images'> & {
+type DesktopHistoryRecord = Omit<HistoryRecord, 'images' | 'thumbnails'> & {
   imagesBase64: string[]
+  thumbnailBase64?: string[]
   upscaleImagesBase64?: Record<string, Record<string, string>>
 }
 
@@ -298,6 +300,9 @@ async function serializeHistoryRecord(record: HistoryRecord): Promise<DesktopHis
   return {
     ...record,
     imagesBase64: await Promise.all((record.images || []).map(blob => blobToBase64(blob))),
+    thumbnailBase64: record.thumbnails?.length
+      ? await Promise.all(record.thumbnails.map(blob => blobToBase64(blob)))
+      : [],
     upscaleImagesBase64,
   }
 }
@@ -313,6 +318,7 @@ function deserializeHistoryRecord(record: DesktopHistoryRecord): HistoryRecord {
   return {
     ...record,
     images: (record.imagesBase64 || []).map(base64 => base64ToBlob(base64)),
+    thumbnails: (record.thumbnailBase64 || []).map(base64 => base64ToBlob(base64)),
     upscaledImages,
     isFavorite: !!record.isFavorite,
     favoritedAt: record.favoritedAt || null,
@@ -560,6 +566,33 @@ export function saveHistoryUpscaleVariant(
         [factor]: base64ToBlob(imageBase64),
       }
       const updateRequest = store.put({ ...record, upscaledImages })
+      updateRequest.onsuccess = () => resolve()
+      updateRequest.onerror = () => reject(updateRequest.error)
+    }
+    request.onerror = () => reject(request.error)
+  })
+}
+
+export function saveHistoryThumbnails(recordId: number, thumbnailsBase64: string[]) {
+  if (isDesktopApp()) {
+    return invokeDesktop<void>('save_history_thumbnails', {
+      recordId,
+      thumbnailsBase64,
+    })
+  }
+
+  return withStore<void>('readwrite', (store, resolve, reject) => {
+    const request = store.get(recordId)
+    request.onsuccess = () => {
+      const record = request.result as HistoryRecord | undefined
+      if (!record) {
+        resolve()
+        return
+      }
+      const updateRequest = store.put({
+        ...record,
+        thumbnails: thumbnailsBase64.map(base64 => base64ToBlob(base64)),
+      })
       updateRequest.onsuccess = () => resolve()
       updateRequest.onerror = () => reject(updateRequest.error)
     }

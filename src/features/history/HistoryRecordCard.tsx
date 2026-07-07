@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import type { MouseEvent } from 'react'
 import { saveImageFile } from '../../lib/files'
 import { getErrorMessage } from '../../lib/errors'
-import type { HistoryRecord } from '../../lib/storage'
+import { getRecord, saveHistoryThumbnails, type HistoryRecord } from '../../lib/storage'
 import { blobToBase64, detectImageMimeType, formatSize, formatTime, sanitizeFilename } from '../../lib/utils'
 import { Icon, type IconName } from '../../components/Icon'
 import type { CropMarginIncomingImage, CropMarginVariant } from '../crop-margin/types'
@@ -28,18 +28,84 @@ type HistoryRecordCardProps = {
 
 export function HistoryRecordCard(props: HistoryRecordCardProps) {
   const { record, onRecallHistory, onRemoveHistory, onToggleFavorite, favoritePending, onShowToast, onSendToCropMargin } = props
-  const displayImages = useMemo(() => getHistoryDisplayImages(record), [record])
-  const cropMarginImages = useMemo(() => getHistoryCropMarginImages(record), [record])
-  const imageUrls = useObjectUrls(displayImages)
+  const [localThumbnails, setLocalThumbnails] = useState<Blob[]>(record.thumbnails || EMPTY_HISTORY_IMAGES)
+  const [thumbnailLoading, setThumbnailLoading] = useState(false)
+  const [thumbnailLoadFailed, setThumbnailLoadFailed] = useState(false)
+  const [fullRecord, setFullRecord] = useState<HistoryRecord | null>(hasFullHistoryImages(record) ? record : null)
+  const displayImages = useMemo(
+    () => localThumbnails.length ? localThumbnails : getHistoryDisplayImages(record),
+    [localThumbnails, record],
+  )
+  const previewImages = useMemo(
+    () => fullRecord ? getHistoryDisplayImages(fullRecord) : EMPTY_HISTORY_IMAGES,
+    [fullRecord],
+  )
+  const { urls: imageUrls, isLoading: imageUrlsLoading } = useObjectUrls(displayImages)
+  const { urls: previewImageUrls, isLoading: previewImageUrlsLoading } = useObjectUrls(previewImages)
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(null)
   const promptSummary = record.prompt || '(无 Prompt)'
   const modeText = getHistoryModeText(record.mode)
   const sizeLabel = getHistorySizeLabel(record)
   const titleLabel = record.mode === 'upscale' ? (record.providerName || record.modelName || '超分服务') : record.modelId
-  const previewUrl = previewIndex !== null ? imageUrls[previewIndex] : ''
-  const hasPreview = previewIndex !== null && !!previewUrl
-  const hasMultipleImages = imageUrls.length > 1
+  const activePreviewUrls = previewImageUrls.length ? previewImageUrls : imageUrls
+  const previewUrl = previewIndex !== null ? activePreviewUrls[previewIndex] : ''
+  const previewTotal = Math.max(activePreviewUrls.length, displayImages.length, record.imageCount || 0)
+  const hasPreview = previewIndex !== null && (!!previewUrl || previewImageUrlsLoading)
+  const hasMultipleImages = previewTotal > 1
+  const canUseRecordImages = record.imageCount > 0 || displayImages.length > 0
+
+  useEffect(() => {
+    setLocalThumbnails(record.thumbnails || EMPTY_HISTORY_IMAGES)
+    setThumbnailLoadFailed(false)
+    setFullRecord(hasFullHistoryImages(record) ? record : null)
+  }, [record])
+
+  useEffect(() => {
+    let cancelled = false
+    if (localThumbnails.length || record.id === undefined)
+      return
+
+    setThumbnailLoading(true)
+    setThumbnailLoadFailed(false)
+
+    void (async () => {
+      try {
+        const recordId = record.id
+        if (recordId === undefined)
+          throw new Error('历史记录不存在')
+
+        const detailRecord = hasFullHistoryImages(record) ? record : await getRecord(recordId)
+        if (!detailRecord)
+          throw new Error('历史记录不存在')
+
+        const sourceImages = getHistoryDisplayImages(detailRecord)
+        if (!sourceImages.length)
+          throw new Error('图片文件缺失或无法读取')
+
+        const thumbnails = await createHistoryThumbnails(sourceImages)
+        const thumbnailBase64 = await Promise.all(thumbnails.map(blob => blobToBase64(blob)))
+        if (cancelled)
+          return
+
+        setFullRecord(detailRecord)
+        setLocalThumbnails(thumbnails)
+        await saveHistoryThumbnails(recordId, thumbnailBase64)
+      }
+      catch {
+        if (!cancelled)
+          setThumbnailLoadFailed(true)
+      }
+      finally {
+        if (!cancelled)
+          setThumbnailLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [localThumbnails.length, record])
 
   useEffect(() => {
     if (!hasPreview && !contextMenu)
@@ -55,33 +121,65 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
         setPreviewIndex(null)
         return
       }
-      if (event.key === 'ArrowLeft') {
+      if (event.key === 'ArrowLeft' && previewTotal) {
         event.preventDefault()
-        setPreviewIndex(current => current === null ? current : getPreviousImageIndex(current, imageUrls.length))
+        setPreviewIndex(current => current === null ? current : getPreviousImageIndex(current, previewTotal))
       }
-      if (event.key === 'ArrowRight') {
+      if (event.key === 'ArrowRight' && previewTotal) {
         event.preventDefault()
-        setPreviewIndex(current => current === null ? current : getNextImageIndex(current, imageUrls.length))
+        setPreviewIndex(current => current === null ? current : getNextImageIndex(current, previewTotal))
       }
     }
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [contextMenu, hasPreview, imageUrls.length])
+  }, [contextMenu, hasPreview, previewTotal])
 
   function openPreview(index: number) {
     closeContextMenu()
     setPreviewIndex(index)
+    void loadFullRecord().catch((error) => {
+      setPreviewIndex(null)
+      onShowToast(`预览失败: ${getErrorMessage(error)}`, 'error')
+    })
   }
 
   function showPrevious(event: React.MouseEvent) {
     event.stopPropagation()
-    setPreviewIndex(current => current === null ? current : getPreviousImageIndex(current, imageUrls.length))
+    setPreviewIndex(current => current === null ? current : getPreviousImageIndex(current, previewTotal))
   }
 
   function showNext(event: React.MouseEvent) {
     event.stopPropagation()
-    setPreviewIndex(current => current === null ? current : getNextImageIndex(current, imageUrls.length))
+    setPreviewIndex(current => current === null ? current : getNextImageIndex(current, previewTotal))
+  }
+
+  async function loadFullRecord() {
+    if (fullRecord && hasFullHistoryImages(fullRecord))
+      return fullRecord
+    if (hasFullHistoryImages(record)) {
+      setFullRecord(record)
+      return record
+    }
+    if (record.id === undefined)
+      throw new Error('历史记录不存在')
+
+    const detailRecord = await getRecord(record.id)
+    if (!detailRecord)
+      throw new Error('历史记录不存在')
+    if (!hasFullHistoryImages(detailRecord))
+      throw new Error('图片文件缺失或无法读取')
+
+    setFullRecord(detailRecord)
+    return detailRecord
+  }
+
+  async function getFullDisplayImage(index: number) {
+    const detailRecord = await loadFullRecord()
+    const blob = getHistoryDisplayImages(detailRecord)[index]
+    if (!blob)
+      throw new Error('图片文件缺失或无法读取')
+    return { detailRecord, blob }
   }
 
   function toggleFavorite(event: React.MouseEvent) {
@@ -125,13 +223,10 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     if (index === undefined)
       return
 
-    const blob = displayImages[index]
-    if (!blob)
-      return
-
-    const mimeType = normalizeImageMimeType(blob.type)
-    const filename = getHistoryImageFilename(record, index, mimeType)
     try {
+      const { detailRecord, blob } = await getFullDisplayImage(index)
+      const mimeType = normalizeImageMimeType(blob.type)
+      const filename = getHistoryImageFilename(detailRecord, index, mimeType)
       const imageBase64 = await blobToBase64(blob)
       const result = await saveImageFile({ imageBase64, filename, mimeType })
       if (result.status === 'cancelled')
@@ -150,12 +245,9 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     if (index === undefined)
       return
 
-    const blob = displayImages[index]
-    if (!blob)
-      return
-
-    const mimeType = normalizeImageMimeType(blob.type)
     try {
+      const { blob } = await getFullDisplayImage(index)
+      const mimeType = normalizeImageMimeType(blob.type)
       const imageBase64 = await blobToBase64(blob)
       await navigator.clipboard.writeText(`data:${mimeType};base64,${imageBase64}`)
       onShowToast('Base64 已复制到剪贴板', 'success')
@@ -171,12 +263,9 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     if (index === undefined)
       return
 
-    const blob = displayImages[index]
-    if (!blob)
-      return
-
     try {
-      const image = await createCropMarginImage(record, blob, index)
+      const { detailRecord, blob } = await getFullDisplayImage(index)
+      const image = await createCropMarginImage(detailRecord, blob, index)
       onSendToCropMargin([image])
     }
     catch (error) {
@@ -185,13 +274,16 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
   }
 
   async function sendRecordToCropMargin() {
-    if (!cropMarginImages.length) {
+    if (!canUseRecordImages) {
       onShowToast('该记录没有可发送的图片', 'error')
       return
     }
 
     try {
-      const images = await createCropMarginImages(record)
+      const detailRecord = await loadFullRecord()
+      const images = await createCropMarginImages(detailRecord)
+      if (!images.length)
+        throw new Error('图片文件缺失或无法读取')
       onSendToCropMargin(images)
     }
     catch (error) {
@@ -219,9 +311,16 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
                 ))}
               </div>
             )
+          : thumbnailLoading || (displayImages.length && imageUrlsLoading)
+              ? (
+                  <div className="thumb-placeholder history-thumb-placeholder loading">
+                    <span className="spinner" />
+                  </div>
+                )
           : (
               <div className="thumb-placeholder history-thumb-placeholder">
                 <Icon name={getHistoryPlaceholderIcon(record.mode)} size={28} />
+                {thumbnailLoadFailed ? <span className="history-thumb-placeholder-text">图片无法读取</span> : null}
               </div>
             )}
       </div>
@@ -259,7 +358,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
       </div>
       <div className="card-actions history-card-actions" onClick={event => event.stopPropagation()}>
         <button className="history-action-btn primary-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>{record.mode === 'upscale' ? '回显到超分台' : '回显到工作台'}</button>
-        <button className="history-action-btn" type="button" disabled={!cropMarginImages.length} onClick={() => void sendRecordToCropMargin()}>发送到裁剪台</button>
+        <button className="history-action-btn" type="button" disabled={!canUseRecordImages} onClick={() => void sendRecordToCropMargin()}>发送到裁剪台</button>
         <button className="history-action-btn delete-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id)}>删除记录</button>
       </div>
       {hasPreview
@@ -276,8 +375,14 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
                   )
                 : null}
               <div className="history-preview-stage" onClick={event => event.stopPropagation()}>
-                <img src={previewUrl} alt={`历史预览 ${previewIndex + 1}`} onContextMenu={event => openContextMenu(event, previewIndex)} />
-                <div className="history-preview-count">{previewIndex + 1} / {imageUrls.length}</div>
+                {previewUrl
+                  ? <img src={previewUrl} alt={`历史预览 ${previewIndex + 1}`} onContextMenu={event => openContextMenu(event, previewIndex)} />
+                  : (
+                      <div className="history-preview-loading">
+                        <span className="spinner" />
+                      </div>
+                    )}
+                <div className="history-preview-count">{previewIndex + 1} / {Math.max(previewTotal, 1)}</div>
               </div>
               {hasMultipleImages
                 ? (
@@ -500,6 +605,54 @@ function getHistorySizeLabel(record: HistoryRecord) {
   return record.params.resolution || record.params.size || '未记录尺寸'
 }
 
+function hasFullHistoryImages(record: HistoryRecord) {
+  return getHistoryDisplayImages(record).length > 0
+}
+
+async function createHistoryThumbnails(images: Blob[]) {
+  const thumbnails: Blob[] = []
+  for (const image of images)
+    thumbnails.push(await createHistoryThumbnail(image))
+  return thumbnails
+}
+
+function createHistoryThumbnail(blob: Blob) {
+  return new Promise<Blob>((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const image = new Image()
+    image.onload = () => {
+      const maxWidth = 360
+      const ratio = image.naturalWidth > maxWidth ? maxWidth / image.naturalWidth : 1
+      const width = Math.max(1, Math.round(image.naturalWidth * ratio))
+      const height = Math.max(1, Math.round(image.naturalHeight * ratio))
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const context = canvas.getContext('2d')
+      if (!context) {
+        URL.revokeObjectURL(url)
+        reject(new Error('缩略图生成失败'))
+        return
+      }
+
+      context.drawImage(image, 0, 0, width, height)
+      canvas.toBlob((thumbnail) => {
+        URL.revokeObjectURL(url)
+        if (!thumbnail) {
+          reject(new Error('缩略图生成失败'))
+          return
+        }
+        resolve(thumbnail)
+      }, 'image/webp', 0.76)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('缩略图生成失败'))
+    }
+    image.src = url
+  })
+}
+
 function getHistoryDisplayImages(record: HistoryRecord) {
   if (record.mode !== 'upscale')
     return record.images || EMPTY_HISTORY_IMAGES
@@ -507,34 +660,6 @@ function getHistoryDisplayImages(record: HistoryRecord) {
   const factor = record.params.upscaleFactor || 2
   const output = record.upscaledImages?.[0]?.[factor]
   return output ? [output, ...(record.images || [])] : (record.images || EMPTY_HISTORY_IMAGES)
-}
-
-function getHistoryCropMarginImages(record: HistoryRecord) {
-  if (record.mode === 'upscale')
-    return getHistoryDisplayImages(record)
-
-  const images = record.images || EMPTY_HISTORY_IMAGES
-  if (!images.length)
-    return EMPTY_HISTORY_IMAGES
-
-  const nextImages: Blob[] = []
-  images.forEach((blob, index) => {
-    nextImages.push(blob)
-    const variants = record.upscaledImages?.[index]
-    if (!variants)
-      return
-
-    Object.keys(variants)
-      .map(Number)
-      .filter(factor => Number.isFinite(factor))
-      .sort((left, right) => left - right)
-      .forEach((factor) => {
-        const variant = variants[factor]
-        if (variant)
-          nextImages.push(variant)
-      })
-  })
-  return nextImages
 }
 
 function getPreviousImageIndex(index: number, total: number) {
@@ -551,22 +676,27 @@ function getNextImageIndex(index: number, total: number) {
 
 function useObjectUrls(blobs: Blob[]) {
   const [urls, setUrls] = useState<string[]>([])
+  const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     if (!blobs.length) {
       setUrls([])
+      setIsLoading(false)
       return
     }
 
     let nextUrls: string[] = []
-    void Promise.all(blobs.map(createImageObjectUrl)).then((urls) => {
+    setIsLoading(true)
+    void Promise.all(blobs.map(blob => createImageObjectUrl(blob).catch(() => ''))).then((urls) => {
+      const validUrls = urls.filter(Boolean)
       if (cancelled) {
-        urls.forEach(url => URL.revokeObjectURL(url))
+        validUrls.forEach(url => URL.revokeObjectURL(url))
         return
       }
-      nextUrls = urls
+      nextUrls = validUrls
       setUrls(nextUrls)
+      setIsLoading(false)
     })
 
     return () => {
@@ -575,7 +705,7 @@ function useObjectUrls(blobs: Blob[]) {
     }
   }, [blobs])
 
-  return urls
+  return { urls, isLoading }
 }
 
 async function createImageObjectUrl(blob: Blob) {
