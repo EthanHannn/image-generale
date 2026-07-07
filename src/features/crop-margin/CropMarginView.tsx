@@ -5,7 +5,7 @@ import { saveImageFile, saveImageFilesToDirectory } from '../../lib/files'
 import { blobToBase64, formatSize, sanitizeFilename } from '../../lib/utils'
 import { cropMarginTemplates, cropMarginWidthOptions, getCropMarginTemplate, getCropMarginWidthOption } from './cropMarginTemplates'
 import { getCropMarginWidth, renderCropMarginImage } from './cropMarginRenderer'
-import type { CropMarginIncomingImage, CropMarginOutput, CropMarginSource, CropMarginTemplateId, CropMarginWidthLevel } from './types'
+import type { CropMarginIncomingImage, CropMarginOutput, CropMarginSource, CropMarginTemplateId, CropMarginVariant, CropMarginWidthLevel } from './types'
 
 type CropMarginViewProps = {
   onShowToast: (message: string, type: 'success' | 'error') => void
@@ -29,17 +29,18 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
   const [isBatchSaving, setIsBatchSaving] = useState(false)
   const [renderState, setRenderState] = useState<RenderState>({ status: 'idle', output: null, message: '上传图片后生成预览' })
   const activeSource = sources.find(source => source.id === activeId) || sources[0] || null
+  const activeVariant = activeSource ? getSelectedVariant(activeSource) : null
   const template = getCropMarginTemplate(templateId)
   const widthOption = getCropMarginWidthOption(widthLevel)
   const selectedSources = sources.filter(source => selectedSourceIds.has(source.id))
   const selectedCount = selectedSources.length
-  const expectedMarginWidth = activeSource ? getCropMarginWidth(activeSource.width, widthOption.ratio) : 0
+  const expectedMarginWidth = activeVariant ? getCropMarginWidth(activeVariant.width, widthOption.ratio) : 0
   const outputUrl = renderState.output ? `data:image/png;base64,${renderState.output.base64}` : ''
-  const sourceUrl = activeSource ? `data:${activeSource.mimeType || 'image/png'};base64,${activeSource.base64}` : ''
+  const sourceUrl = activeVariant ? `data:${activeVariant.mimeType || 'image/png'};base64,${activeVariant.base64}` : ''
   const templateName = useMemo(() => template.name, [template.name])
 
   useEffect(() => {
-    if (!activeSource) {
+    if (!activeSource || !activeVariant) {
       setRenderState({ status: 'idle', output: null, message: '上传图片后生成预览' })
       return
     }
@@ -48,8 +49,8 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     setRenderState({ status: 'loading', output: null, message: '正在生成水印裁剪区预览' })
     void renderCropMarginImage({
       sourceDataUrl: sourceUrl,
-      sourceWidth: activeSource.width,
-      sourceHeight: activeSource.height,
+      sourceWidth: activeVariant.width,
+      sourceHeight: activeVariant.height,
       marginRatio: widthOption.ratio,
       template,
     }).then((output) => {
@@ -63,17 +64,14 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     return () => {
       cancelled = true
     }
-  }, [activeSource, sourceUrl, template, widthOption.ratio])
+  }, [activeSource, activeVariant, sourceUrl, template, widthOption.ratio])
 
   useEffect(() => {
     if (!incomingVersion || incomingVersionRef.current === incomingVersion || !incomingImages.length)
       return
 
     incomingVersionRef.current = incomingVersion
-    const nextSources = incomingImages.map(image => ({
-      ...image,
-      id: image.id || makeSourceId(),
-    }))
+    const nextSources = incomingImages.map(normalizeIncomingSource)
     setSources(current => [...nextSources, ...current])
     setActiveId(nextSources[0]?.id || '')
     setSelectedSourceIds(current => new Set([...nextSources.map(source => source.id), ...current]))
@@ -158,13 +156,17 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     setSelectedSourceIds(new Set())
   }
 
+  function selectSourceVariant(sourceId: string, variantId: string) {
+    setSources(current => current.map(source => source.id === sourceId ? { ...source, selectedVariantId: variantId } : source))
+  }
+
   async function handleDownload() {
-    if (!activeSource || !renderState.output) {
+    if (!activeSource || !activeVariant || !renderState.output) {
       onShowToast('暂无可下载图片', 'error')
       return
     }
 
-    const filename = makeOutputFilename(activeSource, templateId, makeTimestamp())
+    const filename = makeOutputFilename(activeSource, activeVariant, templateId, makeTimestamp())
     try {
       const result = await saveImageFile({ imageBase64: renderState.output.base64, filename, mimeType: 'image/png' })
       if (result.status === 'cancelled')
@@ -190,17 +192,18 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
     try {
       const images = []
       for (const [index, source] of selectedSources.entries()) {
+        const variant = getSelectedVariant(source)
         try {
           const output = await renderCropMarginImage({
-            sourceDataUrl: `data:${source.mimeType || 'image/png'};base64,${source.base64}`,
-            sourceWidth: source.width,
-            sourceHeight: source.height,
+            sourceDataUrl: `data:${variant.mimeType || 'image/png'};base64,${variant.base64}`,
+            sourceWidth: variant.width,
+            sourceHeight: variant.height,
             marginRatio: widthOption.ratio,
             template,
           })
           images.push({
             imageBase64: output.base64,
-            filename: makeOutputFilename(source, templateId, timestamp, index + 1),
+            filename: makeOutputFilename(source, variant, templateId, timestamp, index + 1),
             mimeType: 'image/png' as const,
           })
         }
@@ -253,7 +256,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
           <input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={handleFileInput} />
           <span className="crop-margin-dropzone-icon"><Icon name="upload" size={24} /></span>
           <strong>{activeSource ? activeSource.fileName : '点击或拖入图片'}</strong>
-          <span>{activeSource ? `${formatSize(activeSource.fileSize)} · ${activeSource.width} × ${activeSource.height}px` : '支持 PNG、JPG、WEBP，可多选'}</span>
+          <span>{activeVariant ? `${activeVariant.label} · ${formatSize(activeVariant.fileSize)} · ${activeVariant.width} × ${activeVariant.height}px` : '支持 PNG、JPG、WEBP，可多选'}</span>
         </label>
 
         <div className="crop-margin-section">
@@ -317,30 +320,54 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
                   </button>
                 </div>
                 <div className="crop-source-list">
-                  {sources.map(source => (
-                    <div key={source.id} className={`crop-source-item ${activeSource?.id === source.id ? 'active' : ''}`}>
-                      <label className="crop-source-check" aria-label={`选择 ${source.fileName}`}>
-                        <input
-                          type="checkbox"
-                          checked={selectedSourceIds.has(source.id)}
-                          onChange={() => toggleSourceSelected(source.id)}
-                        />
-                      </label>
-                      <button type="button" className="crop-source-select" onClick={() => setActiveId(source.id)}>
-                        <span>{source.fileName}</span>
-                        <small>{source.width} × {source.height}px</small>
-                      </button>
-                      <button
-                        type="button"
-                        className="crop-source-remove"
-                        title="从队列移除"
-                        aria-label={`从队列移除 ${source.fileName}`}
-                        onClick={() => removeSource(source.id)}
-                      >
-                        <Icon name="close" size={14} />
-                      </button>
-                    </div>
-                  ))}
+                  {sources.map((source) => {
+                    const selectedVariant = getSelectedVariant(source)
+                    return (
+                      <div key={source.id} className={`crop-source-item ${activeSource?.id === source.id ? 'active' : ''}`}>
+                        <label className="crop-source-check" aria-label={`选择 ${source.fileName}`}>
+                          <input
+                            type="checkbox"
+                            checked={selectedSourceIds.has(source.id)}
+                            onChange={() => toggleSourceSelected(source.id)}
+                          />
+                        </label>
+                        <div className="crop-source-main">
+                          <button type="button" className="crop-source-select" onClick={() => setActiveId(source.id)}>
+                            <span>{source.fileName}</span>
+                            <small>{source.sourceLabel ? `${source.sourceLabel} · ` : ''}{selectedVariant.label} · {selectedVariant.width} × {selectedVariant.height}px</small>
+                          </button>
+                          {source.variants.length > 1
+                            ? (
+                                <div className="crop-variant-row" aria-label={`${source.fileName} 版本选择`}>
+                                  {source.variants.map(variant => (
+                                    <button
+                                      key={variant.id}
+                                      type="button"
+                                      className={`crop-variant-chip ${source.selectedVariantId === variant.id ? 'active' : ''}`}
+                                      onClick={() => {
+                                        setActiveId(source.id)
+                                        selectSourceVariant(source.id, variant.id)
+                                      }}
+                                    >
+                                      {variant.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )
+                            : null}
+                        </div>
+                        <button
+                          type="button"
+                          className="crop-source-remove"
+                          title="从队列移除"
+                          aria-label={`从队列移除 ${source.fileName}`}
+                          onClick={() => removeSource(source.id)}
+                        >
+                          <Icon name="close" size={14} />
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )
@@ -363,7 +390,7 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
               <div className="crop-quality-strip">
                 <div>
                   <span>原图主体</span>
-                  <strong>{activeSource.width} × {activeSource.height}px</strong>
+                  <strong>{activeVariant ? `${activeVariant.width} × ${activeVariant.height}px` : '-'}</strong>
                 </div>
                 <div>
                   <span>新增水印裁剪区</span>
@@ -422,6 +449,14 @@ export function CropMarginView({ onShowToast, incomingImages, incomingVersion }:
 
 async function readCropMarginSource(file: File): Promise<CropMarginSource> {
   const [base64, dimensions] = await Promise.all([blobToBase64(file), readImageDimensions(file)])
+  const variant = makeOriginalVariant({
+    fileName: file.name,
+    fileSize: file.size,
+    mimeType: file.type || 'image/png',
+    base64,
+    width: dimensions.width,
+    height: dimensions.height,
+  })
   return {
     id: makeSourceId(),
     fileName: file.name,
@@ -430,7 +465,56 @@ async function readCropMarginSource(file: File): Promise<CropMarginSource> {
     base64,
     width: dimensions.width,
     height: dimensions.height,
+    variants: [variant],
+    selectedVariantId: variant.id,
   }
+}
+
+function normalizeIncomingSource(image: CropMarginIncomingImage): CropMarginSource {
+  const fallbackVariant = makeOriginalVariant(image)
+  const variants = normalizeVariants(image.variants, fallbackVariant)
+  const selectedVariantId = variants.some(variant => variant.id === image.selectedVariantId)
+    ? image.selectedVariantId as string
+    : variants[0].id
+
+  return {
+    ...image,
+    id: image.id || makeSourceId(),
+    variants,
+    selectedVariantId,
+  }
+}
+
+function normalizeVariants(variants: CropMarginVariant[] | undefined, fallbackVariant: CropMarginVariant) {
+  const nextVariants = variants?.length ? variants : [fallbackVariant]
+  const uniqueVariants: CropMarginVariant[] = []
+  const ids = new Set<string>()
+  nextVariants.forEach((variant, index) => {
+    const id = variant.id || (index === 0 ? 'original' : `variant_${index}`)
+    if (ids.has(id))
+      return
+
+    ids.add(id)
+    uniqueVariants.push({ ...variant, id })
+  })
+  return uniqueVariants.length ? uniqueVariants : [fallbackVariant]
+}
+
+function makeOriginalVariant(image: Omit<CropMarginIncomingImage, 'id' | 'variants' | 'selectedVariantId'>): CropMarginVariant {
+  return {
+    id: 'original',
+    label: '原图',
+    fileName: image.fileName,
+    fileSize: image.fileSize,
+    mimeType: image.mimeType,
+    base64: image.base64,
+    width: image.width,
+    height: image.height,
+  }
+}
+
+function getSelectedVariant(source: CropMarginSource) {
+  return source.variants.find(variant => variant.id === source.selectedVariantId) || source.variants[0]
 }
 
 function makeSourceId() {
@@ -457,9 +541,10 @@ function makeTimestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
 }
 
-function makeOutputFilename(source: CropMarginSource, templateId: CropMarginTemplateId, timestamp: string, index?: number) {
+function makeOutputFilename(source: CropMarginSource, variant: CropMarginVariant, templateId: CropMarginTemplateId, timestamp: string, index?: number) {
   const indexPart = index === undefined ? '' : `_${index}`
-  return `watermark_crop_margin_${sanitizeFilename(source.fileName)}_${templateId}${indexPart}_${timestamp}.png`
+  const variantPart = variant.id === 'original' ? '' : `_${sanitizeFilename(variant.id)}`
+  return `watermark_crop_margin_${sanitizeFilename(source.fileName)}${variantPart}_${templateId}${indexPart}_${timestamp}.png`
 }
 
 function getSavedFileLabel(path: string | undefined, fallback: string) {

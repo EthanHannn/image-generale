@@ -1,9 +1,21 @@
+export function detectImageMimeType(b64: string) {
+  const header = atob(b64.slice(0, 32))
+  const bytes = Array.from(header, char => char.charCodeAt(0))
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47)
+    return 'image/png'
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8)
+    return 'image/jpeg'
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50)
+    return 'image/webp'
+  return 'image/png'
+}
+
 export function base64ToBlob(b64: string) {
   const byteChars = atob(b64)
   const byteNumbers = new Array(byteChars.length)
   for (let i = 0; i < byteChars.length; i += 1)
     byteNumbers[i] = byteChars.charCodeAt(i)
-  return new Blob([new Uint8Array(byteNumbers)], { type: 'image/png' })
+  return new Blob([new Uint8Array(byteNumbers)], { type: detectImageMimeType(b64) })
 }
 
 export function blobToBase64(blob: Blob) {

@@ -4,9 +4,9 @@ import type { MouseEvent } from 'react'
 import { saveImageFile } from '../../lib/files'
 import { getErrorMessage } from '../../lib/errors'
 import type { HistoryRecord } from '../../lib/storage'
-import { blobToBase64, formatSize, formatTime, sanitizeFilename } from '../../lib/utils'
+import { blobToBase64, detectImageMimeType, formatSize, formatTime, sanitizeFilename } from '../../lib/utils'
 import { Icon, type IconName } from '../../components/Icon'
-import type { CropMarginIncomingImage } from '../crop-margin/types'
+import type { CropMarginIncomingImage, CropMarginVariant } from '../crop-margin/types'
 
 const EMPTY_HISTORY_IMAGES: Blob[] = []
 type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
@@ -191,7 +191,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     }
 
     try {
-      const images = await Promise.all(cropMarginImages.map((blob, index) => createCropMarginImage(record, blob, index)))
+      const images = await createCropMarginImages(record)
       onSendToCropMargin(images)
     }
     catch (error) {
@@ -338,8 +338,8 @@ function getHistoryImageFilename(record: HistoryRecord, index: number, mimeType:
 }
 
 async function createCropMarginImage(record: HistoryRecord, blob: Blob, index: number): Promise<CropMarginIncomingImage> {
-  const mimeType = normalizeImageMimeType(blob.type)
   const [base64, dimensions] = await Promise.all([blobToBase64(blob), readBlobImageDimensions(blob)])
+  const mimeType = normalizeImageMimeType(detectImageMimeType(base64))
   return {
     id: `history_${record.id || record.timestamp}_${index}_${Date.now()}`,
     fileName: getHistoryImageFilename(record, index, mimeType),
@@ -348,6 +348,80 @@ async function createCropMarginImage(record: HistoryRecord, blob: Blob, index: n
     base64,
     width: dimensions.width,
     height: dimensions.height,
+  }
+}
+
+async function createCropMarginImages(record: HistoryRecord): Promise<CropMarginIncomingImage[]> {
+  if (record.mode === 'upscale')
+    return createUpscaleRecordCropMarginImages(record)
+
+  const images = record.images || EMPTY_HISTORY_IMAGES
+  const items = await Promise.all(images.map((blob, index) => createVariantCropMarginImage(record, blob, index, record.upscaledImages?.[index])))
+  return items.filter((item): item is CropMarginIncomingImage => !!item)
+}
+
+async function createUpscaleRecordCropMarginImages(record: HistoryRecord): Promise<CropMarginIncomingImage[]> {
+  const source = record.images?.[0]
+  if (!source)
+    return []
+
+  const factor = record.params.upscaleFactor || 2
+  const output = record.upscaledImages?.[0]?.[factor]
+  const item = await createVariantCropMarginImage(record, source, 0, output ? { [factor]: output } : undefined, output ? `${factor}x` : 'original')
+  return item ? [item] : []
+}
+
+async function createVariantCropMarginImage(
+  record: HistoryRecord,
+  sourceBlob: Blob,
+  index: number,
+  upscaledImages?: Record<number, Blob>,
+  preferredVariantId?: string,
+): Promise<CropMarginIncomingImage | null> {
+  const variants: CropMarginVariant[] = [await createCropMarginVariant(record, sourceBlob, index, 'original', '原图')]
+  const factors = Object.keys(upscaledImages || {})
+    .map(Number)
+    .filter(factor => Number.isFinite(factor))
+    .sort((left, right) => left - right)
+
+  for (const factor of factors) {
+    const blob = upscaledImages?.[factor]
+    if (!blob)
+      continue
+    variants.push(await createCropMarginVariant(record, blob, index, `${factor}x`, `${factor}X`, factor))
+  }
+
+  const selectedVariantId = preferredVariantId && variants.some(variant => variant.id === preferredVariantId)
+    ? preferredVariantId
+    : variants[variants.length - 1].id
+  const selectedVariant = variants.find(variant => variant.id === selectedVariantId) || variants[0]
+  return {
+    id: `history_${record.id || record.timestamp}_${index}_${selectedVariantId}_${Date.now()}`,
+    fileName: getHistoryImageFilename(record, index, normalizeImageMimeType(selectedVariant.mimeType)),
+    fileSize: selectedVariant.fileSize,
+    mimeType: selectedVariant.mimeType,
+    base64: selectedVariant.base64,
+    width: selectedVariant.width,
+    height: selectedVariant.height,
+    sourceLabel: record.mode === 'upscale' ? '历史超分' : '历史记录',
+    variants,
+    selectedVariantId,
+  }
+}
+
+async function createCropMarginVariant(record: HistoryRecord, blob: Blob, index: number, id: string, label: string, factor?: number): Promise<CropMarginVariant> {
+  const [base64, dimensions] = await Promise.all([blobToBase64(blob), readBlobImageDimensions(blob)])
+  const mimeType = normalizeImageMimeType(detectImageMimeType(base64))
+  return {
+    id,
+    label,
+    fileName: getHistoryImageFilename(record, index, mimeType),
+    fileSize: blob.size,
+    mimeType,
+    base64,
+    width: dimensions.width,
+    height: dimensions.height,
+    factor,
   }
 }
 
@@ -361,9 +435,19 @@ function readBlobImageDimensions(blob: Blob) {
     }
     image.onerror = () => {
       URL.revokeObjectURL(url)
-      reject(new Error('图片尺寸读取失败'))
+      void readBlobImageDimensionsFromBase64(blob).then(resolve).catch(() => reject(new Error('图片尺寸读取失败')))
     }
     image.src = url
+  })
+}
+
+async function readBlobImageDimensionsFromBase64(blob: Blob) {
+  const base64 = await blobToBase64(blob)
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
+    image.onerror = () => reject(new Error('图片尺寸读取失败'))
+    image.src = `data:${detectImageMimeType(base64)};base64,${base64}`
   })
 }
 
@@ -469,18 +553,45 @@ function useObjectUrls(blobs: Blob[]) {
   const [urls, setUrls] = useState<string[]>([])
 
   useEffect(() => {
+    let cancelled = false
     if (!blobs.length) {
       setUrls([])
       return
     }
 
-    const nextUrls = blobs.map(blob => URL.createObjectURL(blob))
-    setUrls(nextUrls)
+    let nextUrls: string[] = []
+    void Promise.all(blobs.map(createImageObjectUrl)).then((urls) => {
+      if (cancelled) {
+        urls.forEach(url => URL.revokeObjectURL(url))
+        return
+      }
+      nextUrls = urls
+      setUrls(nextUrls)
+    })
 
     return () => {
+      cancelled = true
       nextUrls.forEach(url => URL.revokeObjectURL(url))
     }
   }, [blobs])
 
   return urls
+}
+
+async function createImageObjectUrl(blob: Blob) {
+  const mimeType = await detectBlobMimeType(blob)
+  if (blob.type === mimeType)
+    return URL.createObjectURL(blob)
+  return URL.createObjectURL(new Blob([blob], { type: mimeType }))
+}
+
+async function detectBlobMimeType(blob: Blob) {
+  const bytes = new Uint8Array(await blob.slice(0, 12).arrayBuffer())
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47)
+    return 'image/png'
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8)
+    return 'image/jpeg'
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50)
+    return 'image/webp'
+  return blob.type || 'image/png'
 }

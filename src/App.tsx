@@ -3,7 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { Icon, type IconName } from './components/Icon'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
-import type { CropMarginIncomingImage } from './features/crop-margin/types'
+import type { CropMarginIncomingImage, CropMarginVariant } from './features/crop-margin/types'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -40,7 +40,7 @@ import {
 import { upscaleImage } from './lib/upscale'
 import { getErrorMessage } from './lib/errors'
 import { saveImageFile } from './lib/files'
-import { base64ToBlob, blobToBase64, formatSize, sanitizeFilename } from './lib/utils'
+import { base64ToBlob, blobToBase64, detectImageMimeType, formatSize, sanitizeFilename } from './lib/utils'
 
 type StatusType = 'ok' | 'err' | 'loading' | 'warn'
 type StatusValue = { type: StatusType; message: string } | null
@@ -1737,6 +1737,117 @@ export default function App() {
     return results[index]?.b64_json || ''
   }
 
+  async function makeWorkspaceCropMarginImage(index: number): Promise<CropMarginIncomingImage | null> {
+    const originalBase64 = results[index]?.b64_json || ''
+    if (!originalBase64)
+      return null
+
+    const variants: CropMarginVariant[] = []
+    const originalDimensions = await readBase64ImageSize(originalBase64).catch(() => parseImageSize(imageSizes[index]))
+    if (!originalDimensions)
+      return null
+
+    variants.push({
+      id: 'original',
+      label: '原图',
+      fileName: `result_${index + 1}_original.png`,
+      fileSize: getBase64ByteLength(originalBase64),
+      mimeType: 'image/png',
+      base64: originalBase64,
+      width: originalDimensions.width,
+      height: originalDimensions.height,
+    })
+
+    const factors: UpscaleFactor[] = [2, 3, 4]
+    for (const factor of factors) {
+      const imageBase64 = resultUpscaleVariants[index]?.[factor]
+      if (!imageBase64)
+        continue
+
+      const dimensions = await readBase64ImageSize(imageBase64).catch(() => null)
+      if (!dimensions)
+        continue
+
+      variants.push({
+        id: `${factor}x`,
+        label: `${factor}X`,
+        fileName: `result_${index + 1}_${factor}x.png`,
+        fileSize: getBase64ByteLength(imageBase64),
+        mimeType: 'image/png',
+        base64: imageBase64,
+        width: dimensions.width,
+        height: dimensions.height,
+        factor,
+      })
+    }
+
+    const selectedFactor = selectedUpscaleFactors[index] || 1
+    const selectedVariantId = selectedFactor > 1 && variants.some(variant => variant.id === `${selectedFactor}x`) ? `${selectedFactor}x` : 'original'
+    const selectedVariant = variants.find(variant => variant.id === selectedVariantId) || variants[0]
+    return {
+      id: `workspace_${index}_${selectedVariantId}_${Date.now()}`,
+      fileName: `result_${index + 1}.png`,
+      fileSize: selectedVariant.fileSize,
+      mimeType: selectedVariant.mimeType,
+      base64: selectedVariant.base64,
+      width: selectedVariant.width,
+      height: selectedVariant.height,
+      sourceLabel: '工作台',
+      variants,
+      selectedVariantId,
+    }
+  }
+
+  function makeStandaloneCropMarginImage(selectedVariantId: string): CropMarginIncomingImage | null {
+    if (!standaloneUpscale.sourceBase64)
+      return null
+
+    const variants: CropMarginVariant[] = [{
+      id: 'original',
+      label: '原图',
+      fileName: standaloneUpscale.fileName || 'source.png',
+      fileSize: standaloneUpscale.fileSize || getBase64ByteLength(standaloneUpscale.sourceBase64),
+      mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
+      base64: standaloneUpscale.sourceBase64,
+      width: standaloneUpscale.sourceWidth,
+      height: standaloneUpscale.sourceHeight,
+    }]
+
+    const factors: StandaloneUpscaleFactor[] = [2, 3, 4]
+    factors.forEach((factor) => {
+      const variant = standaloneUpscale.completedFactors[factor]
+      if (!variant)
+        return
+
+      variants.push({
+        id: `${factor}x`,
+        label: `${factor}X`,
+        fileName: getStandaloneOutputFilename(factor),
+        fileSize: getBase64ByteLength(variant.outputBase64),
+        mimeType: 'image/png',
+        base64: variant.outputBase64,
+        width: variant.outputWidth,
+        height: variant.outputHeight,
+        factor,
+      })
+    })
+
+    const normalizedSelectedVariantId = variants.some(variant => variant.id === selectedVariantId) ? selectedVariantId : variants[0].id
+    const selectedVariant = variants.find(variant => variant.id === normalizedSelectedVariantId) || variants[0]
+    return {
+      id: `standalone_${normalizedSelectedVariantId}_${Date.now()}`,
+      fileName: standaloneUpscale.fileName || 'standalone_upscale.png',
+      fileSize: selectedVariant.fileSize,
+      mimeType: selectedVariant.mimeType,
+      base64: selectedVariant.base64,
+      width: selectedVariant.width,
+      height: selectedVariant.height,
+      sourceLabel: '超分台',
+      variants,
+      selectedVariantId: normalizedSelectedVariantId,
+    }
+  }
+
   function openCropMarginWithImages(images: CropMarginIncomingImage[], toastMessage: string) {
     if (!images.length) {
       showToast('没有可发送的图片', 'error')
@@ -1750,46 +1861,23 @@ export default function App() {
   }
 
   async function sendResultToCropMargin(index: number) {
-    const imageBase64 = getCurrentImageBase64(index)
-    if (!imageBase64) {
+    const image = await makeWorkspaceCropMarginImage(index)
+    if (!image) {
       showToast('无图片数据可发送', 'error')
       return
     }
 
-    const selectedFactor = selectedUpscaleFactors[index] || 1
-    const dimensions = await readBase64ImageSize(imageBase64).catch(() => parseImageSize(imageSizes[index]))
-    if (!dimensions) {
-      showToast('图片尺寸尚未就绪，请稍候再试', 'error')
-      return
-    }
-
-    const fileName = `result_${index + 1}_${selectedFactor}x.png`
-    openCropMarginWithImages([{
-      id: `workspace_${index}_${selectedFactor}_${Date.now()}`,
-      fileName,
-      fileSize: getBase64ByteLength(imageBase64),
-      mimeType: 'image/png',
-      base64: imageBase64,
-      width: dimensions.width,
-      height: dimensions.height,
-    }], '已发送到裁剪台')
+    openCropMarginWithImages([image], '已发送到裁剪台')
   }
 
   function sendStandaloneSourceToCropMargin() {
-    if (!standaloneUpscale.sourceBase64) {
+    const image = makeStandaloneCropMarginImage('original')
+    if (!image) {
       showToast('暂无原图可发送', 'error')
       return
     }
 
-    openCropMarginWithImages([{
-      id: `standalone_source_${Date.now()}`,
-      fileName: standaloneUpscale.fileName || 'source.png',
-      fileSize: standaloneUpscale.fileSize || getBase64ByteLength(standaloneUpscale.sourceBase64),
-      mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
-      base64: standaloneUpscale.sourceBase64,
-      width: standaloneUpscale.sourceWidth,
-      height: standaloneUpscale.sourceHeight,
-    }], '原图已发送到裁剪台')
+    openCropMarginWithImages([image], '原图已发送到裁剪台')
   }
 
   function sendStandaloneOutputToCropMargin() {
@@ -1798,50 +1886,25 @@ export default function App() {
       return
     }
 
-    openCropMarginWithImages([{
-      id: `standalone_output_${standaloneUpscale.factor}_${Date.now()}`,
-      fileName: getStandaloneOutputFilename(),
-      fileSize: getBase64ByteLength(standaloneUpscale.outputBase64),
-      mimeType: 'image/png',
-      base64: standaloneUpscale.outputBase64,
-      width: standaloneUpscale.outputWidth,
-      height: standaloneUpscale.outputHeight,
-    }], '超分图已发送到裁剪台')
+    const image = makeStandaloneCropMarginImage(`${standaloneUpscale.factor}x`)
+    if (!image) {
+      showToast('暂无超分图可发送', 'error')
+      return
+    }
+
+    openCropMarginWithImages([image], '超分图已发送到裁剪台')
   }
 
   function sendStandaloneWorkbenchToCropMargin() {
-    const images: CropMarginIncomingImage[] = []
-
-    if (standaloneUpscale.sourceBase64) {
-      images.push({
-        id: `standalone_source_${Date.now()}`,
-        fileName: standaloneUpscale.fileName || 'source.png',
-        fileSize: standaloneUpscale.fileSize || getBase64ByteLength(standaloneUpscale.sourceBase64),
-        mimeType: normalizeImageMimeType(standaloneUpscale.mimeType),
-        base64: standaloneUpscale.sourceBase64,
-        width: standaloneUpscale.sourceWidth,
-        height: standaloneUpscale.sourceHeight,
-      })
+    const completedFactors = ([2, 3, 4] as StandaloneUpscaleFactor[]).filter(factor => standaloneUpscale.completedFactors[factor])
+    const selectedVariantId = completedFactors.length ? `${completedFactors[completedFactors.length - 1]}x` : 'original'
+    const image = makeStandaloneCropMarginImage(selectedVariantId)
+    if (!image) {
+      showToast('暂无图片可发送', 'error')
+      return
     }
 
-    const factors: StandaloneUpscaleFactor[] = [2, 3, 4]
-    factors.forEach((factor) => {
-      const variant = standaloneUpscale.completedFactors[factor]
-      if (!variant)
-        return
-
-      images.push({
-        id: `standalone_output_${factor}_${Date.now()}`,
-        fileName: getStandaloneOutputFilename(factor),
-        fileSize: getBase64ByteLength(variant.outputBase64),
-        mimeType: 'image/png',
-        base64: variant.outputBase64,
-        width: variant.outputWidth,
-        height: variant.outputHeight,
-      })
-    })
-
-    openCropMarginWithImages(images, `已发送 ${images.length} 张超分台图片到裁剪台`)
+    openCropMarginWithImages([image], '已发送超分台图片到裁剪台')
   }
 
   function sendHistoryImagesToCropMargin(images: CropMarginIncomingImage[]) {
@@ -4177,12 +4240,12 @@ function parseImageSize(text: string | undefined) {
   return { width: Number(match[1]), height: Number(match[2]) }
 }
 
-function readBase64ImageSize(imageBase64: string, mimeType = 'image/png') {
+function readBase64ImageSize(imageBase64: string, mimeType?: string) {
   return new Promise<{ width: number; height: number }>((resolve, reject) => {
     const image = new Image()
     image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
     image.onerror = () => reject(new Error('图片尺寸读取失败'))
-    image.src = `data:${mimeType};base64,${imageBase64}`
+    image.src = `data:${mimeType || detectImageMimeType(imageBase64)};base64,${imageBase64}`
   })
 }
 
