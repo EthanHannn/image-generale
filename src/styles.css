@@ -91,6 +91,8 @@ textarea {
 button {
   border: none;
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .header {
@@ -4025,12 +4027,29 @@ details {
 summary {
   cursor: pointer;
   color: var(--text-secondary);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.auto-upscale-toggle,
+.storage-limit-toggle {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 pre {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-secondary);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+code,
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .img-modal {
