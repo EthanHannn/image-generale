@@ -52,6 +52,7 @@ export function CropMarginView({ onShowToast, sources, onSourcesChange, focusSou
 
     let cancelled = false
     setRenderState({ status: 'loading', output: null, message: '正在生成水印裁剪区预览' })
+    setSourceError(activeSource.id, '')
     void renderCropMarginImage({
       sourceDataUrl: sourceUrl,
       sourceWidth: activeVariant.width,
@@ -59,17 +60,22 @@ export function CropMarginView({ onShowToast, sources, onSourcesChange, focusSou
       marginRatio: widthOption.ratio,
       template,
     }).then((output) => {
-      if (!cancelled)
+      if (!cancelled) {
         setRenderState({ status: 'ready', output, message: '预览已生成' })
+        setSourceError(activeSource.id, '')
+      }
     }).catch((error) => {
-      if (!cancelled)
-        setRenderState({ status: 'error', output: null, message: error instanceof Error ? error.message : '图片处理失败' })
+      if (!cancelled) {
+        const message = getErrorMessage(error)
+        setRenderState({ status: 'error', output: null, message })
+        setSourceError(activeSource.id, message)
+      }
     })
 
     return () => {
       cancelled = true
     }
-  }, [activeSource, activeVariant, sourceUrl, template, widthOption.ratio])
+  }, [activeSource?.id, activeVariant, sourceUrl, template, widthOption.ratio])
 
   useEffect(() => {
     if (!focusVersion || focusVersionRef.current === focusVersion)
@@ -210,7 +216,17 @@ export function CropMarginView({ onShowToast, sources, onSourcesChange, focusSou
   }
 
   function selectSourceVariant(sourceId: string, variantId: string) {
-    onSourcesChange(current => current.map(source => source.id === sourceId ? { ...source, selectedVariantId: variantId } : source))
+    onSourcesChange(current => current.map(source => source.id === sourceId ? { ...source, selectedVariantId: variantId, errorMessage: undefined } : source))
+  }
+
+  function setSourceError(sourceId: string, message: string) {
+    const nextMessage = message || undefined
+    onSourcesChange(current => current.map((source) => {
+      if (source.id !== sourceId || source.errorMessage === nextMessage)
+        return source
+
+      return { ...source, errorMessage: nextMessage }
+    }))
   }
 
   async function handleDownload() {
@@ -247,6 +263,7 @@ export function CropMarginView({ onShowToast, sources, onSourcesChange, focusSou
       for (const [index, source] of selectedSources.entries()) {
         const variant = getSelectedVariant(source)
         try {
+          setSourceError(source.id, '')
           const output = await renderCropMarginImage({
             sourceDataUrl: `data:${variant.mimeType || 'image/png'};base64,${variant.base64}`,
             sourceWidth: variant.width,
@@ -260,7 +277,8 @@ export function CropMarginView({ onShowToast, sources, onSourcesChange, focusSou
             mimeType: 'image/png' as const,
           })
         }
-        catch {
+        catch (error) {
+          setSourceError(source.id, getErrorMessage(error))
           renderFailedCount += 1
         }
       }
@@ -418,6 +436,9 @@ export function CropMarginView({ onShowToast, sources, onSourcesChange, focusSou
                             </button>
                           ))}
                         </div>
+                        {source.errorMessage
+                          ? <div className="crop-source-error">{source.errorMessage}</div>
+                          : null}
                       </div>
                     )
                   })}
@@ -576,4 +597,8 @@ function getSavedFileLabel(path: string | undefined, fallback: string) {
   if (!path)
     return fallback
   return path.split(/[\\/]/).pop() || fallback
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : '图片处理失败'
 }

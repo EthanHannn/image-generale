@@ -2846,6 +2846,17 @@ button:disabled {
   opacity: 0.78;
 }
 
+.crop-source-error {
+  margin: 0 36px 0 32px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--err) 34%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+  color: var(--err);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .crop-variant-chip {
   flex: 0 0 auto;
   min-width: 34px;

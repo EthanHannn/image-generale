@@ -19,6 +19,7 @@ export type CropMarginSource = Omit<CropMarginVariant, 'label' | 'factor'> & {
   sourceLabel?: string
   variants: CropMarginVariant[]
   selectedVariantId: string
+  errorMessage?: string
 }
 
 export type CropMarginIncomingImage = Omit<CropMarginSource, 'id' | 'variants' | 'selectedVariantId'> & {
