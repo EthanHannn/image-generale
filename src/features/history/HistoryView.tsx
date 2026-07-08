@@ -121,6 +121,33 @@ export function HistoryView(props: HistoryViewProps) {
     setCurrentPage(Math.min(Math.max(page, 1), totalPages))
   }
 
+  useEffect(() => {
+    function handleHistoryKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)
+        return
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+        return
+      if (isEditableShortcutTarget(event.target) || document.querySelector('.history-preview-modal, .image-context-menu'))
+        return
+      if (pageLoading)
+        return
+
+      if (event.key === 'ArrowLeft' && currentPage > 1) {
+        event.preventDefault()
+        changeHistoryPage(currentPage - 1)
+        return
+      }
+
+      if (event.key === 'ArrowRight' && currentPage < totalPages) {
+        event.preventDefault()
+        changeHistoryPage(currentPage + 1)
+      }
+    }
+
+    window.addEventListener('keydown', handleHistoryKeyDown)
+    return () => window.removeEventListener('keydown', handleHistoryKeyDown)
+  }, [currentPage, pageLoading, totalPages])
+
   return (
     <div className="view-panel-group">
       <section className="panel panel-large history-view-panel">
@@ -160,4 +187,12 @@ export function HistoryView(props: HistoryViewProps) {
       </section>
     </div>
   )
+}
+
+function isEditableShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement))
+    return false
+
+  const tagName = target.tagName.toLowerCase()
+  return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select'
 }
