@@ -699,6 +699,9 @@ export default function App() {
   }
 
   function acceptWorkspaceDropFiles(files: File[]) {
+    if (!files.length)
+      return
+
     const maxFiles = currentModel?.maxInputImages ?? files.length
     if (maxFiles <= 0) {
       showToast('当前模型不支持参考图', 'error')
@@ -1376,7 +1379,7 @@ export default function App() {
   }
 
   function onFileChange(files: FileList | null) {
-    setRefFiles(files ? Array.from(files) : [])
+    acceptWorkspaceDropFiles(Array.from(files || []))
   }
 
   function updateTargetSizeMode(mode: TargetSizeMode) {
@@ -1594,8 +1597,7 @@ export default function App() {
       }
       else {
         const formData = new FormData()
-        const fieldName = useRefFiles.length > 1 ? 'image[]' : 'image'
-        useRefFiles.forEach(file => formData.append(fieldName, file))
+        useRefFiles.forEach(file => formData.append('image', file))
         formData.append('prompt', requestPrompt)
         formData.append('model', currentModel.id)
         formData.append('n', String(Math.min(params.n || 1, currentModel.maxGenerations)))
@@ -1606,7 +1608,7 @@ export default function App() {
         if (currentModel.hasResolution && params.resolution)
           formData.append('resolution', params.resolution)
 
-        nextRequestJson = `[multipart] prompt=${requestPrompt} model=${currentModel.id} refImages=${useRefFiles.length} size=${currentSizePlan.requestSize}`
+        nextRequestJson = `[multipart] prompt=${requestPrompt} model=${currentModel.id} imageFields=${useRefFiles.length} size=${currentSizePlan.requestSize}`
         setRequestJson(nextRequestJson)
         setGenStatus({ type: 'loading', message: `图生图中（上传 ${useRefFiles.length} 张参考图，约 15-30s）...` })
         response = await fetch(`${baseUrl}/v1/images/edits`, {
@@ -1652,7 +1654,13 @@ export default function App() {
       setResultUpscaleVariants({})
       setGenStatus({ type: 'ok', message: `成功生成 ${nextResults.length} 张，用时 ${duration}s` })
       showToast(`生成成功：${nextResults.length} 张图片`, 'success')
-      const recordId = await saveHistory(nextResults, duration, nextRequestJson, currentSizePlan, requestPrompt)
+      let recordId: number | null = null
+      try {
+        recordId = await saveHistory(nextResults, duration, nextRequestJson, currentSizePlan, requestPrompt)
+      }
+      catch (error) {
+        showToast(`历史记录保存失败: ${getErrorMessage(error)}`, 'error')
+      }
       if (targetSize.autoUpscale && currentSizePlan.needsUpscale && currentSizePlan.canAutoUpscale)
         void runAutoUpscaleQueue(nextResults, currentSizePlan, recordId)
     }
@@ -2011,7 +2019,7 @@ export default function App() {
     const selectedFactor = options.factor || selectedUpscaleFactors[index] || 1
     if (options.factor)
       setSelectedUpscaleFactors(current => ({ ...current, [index]: options.factor as UpscaleFactor }))
-    const existingVariant = resultUpscaleVariants[index]?.[selectedFactor]
+    const existingVariant = options.sourceImage ? undefined : resultUpscaleVariants[index]?.[selectedFactor]
     if (selectedFactor === 1) {
       showToast('1X 为原图，不需要提升分辨率', 'error')
       return
@@ -2047,6 +2055,9 @@ export default function App() {
           [selectedFactor]: out.imageBase64,
         },
       }))
+      setUpscalingIndex(current => current === index ? null : current)
+      if (options.auto)
+        setAutoUpscalingIndexes(current => ({ ...current, [index]: false }))
       setImageSizes(current => ({ ...current, [index]: `${out.width} × ${out.height}px` }))
       setUpscaleResponseJson(JSON.stringify(out.responseJson || {
         width: out.width,
@@ -2939,6 +2950,7 @@ export default function App() {
                       const isUpscaleConfigured = isUpscaleProviderConfigured(currentUpscaleProvider)
                       const isAutoUpscaling = !!autoUpscalingIndexes[index]
                       const hasSelectedVariant = selectedFactor > 1 && !!selectedVariant
+                      const isUpscalingThis = upscalingIndex === index && !hasSelectedVariant
                       const originalDims = originalImageSizes[index] || parseImageSize(imageSizes[index])
                       const upscalePreviewText = getUpscalePreviewText(originalDims, selectedFactor, hasSelectedVariant)
                       const imageAspectRatio = originalDims ? `${originalDims.width} / ${originalDims.height}` : undefined
@@ -3017,7 +3029,7 @@ export default function App() {
                                           key={factor}
                                           type="button"
                                           className={`chip ${selectedFactor === factor ? 'active' : ''} ${factor > 1 && resultUpscaleVariants[index]?.[factor] ? 'completed' : ''}`}
-                                          disabled={upscalingIndex === index}
+                                          disabled={isUpscalingThis}
                                           onClick={() => setSelectedUpscaleFactors(current => ({ ...current, [index]: factor }))}
                                         >
                                           {factor}X
@@ -3032,7 +3044,7 @@ export default function App() {
                                       title={upscaleTitle}
                                       onClick={() => void handleUpscale(index)}
                                     >
-                                      {upscalingIndex === index ? (isAutoUpscaling ? '自动超分中…' : '放大中…') : '提升分辨率'}
+                                      {isUpscalingThis ? (isAutoUpscaling ? '自动超分中…' : '放大中…') : '提升分辨率'}
                                     </button>
                                   </div>
                                 )
