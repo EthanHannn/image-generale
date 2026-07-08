@@ -3,7 +3,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { Icon, type IconName } from './components/Icon'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
-import type { CropMarginIncomingImage, CropMarginVariant } from './features/crop-margin/types'
+import { mergeCropMarginSources, normalizeCropMarginIncomingSource } from './features/crop-margin/cropMarginQueue'
+import type { CropMarginIncomingImage, CropMarginSource, CropMarginVariant } from './features/crop-margin/types'
 import { HistoryView } from './features/history/HistoryView'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
@@ -268,8 +269,9 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<ImagePreviewState | null>(null)
   const [previewDragging, setPreviewDragging] = useState(false)
   const [globalDropTarget, setGlobalDropTarget] = useState<GlobalDropTarget | null>(null)
-  const [cropMarginIncomingImages, setCropMarginIncomingImages] = useState<CropMarginIncomingImage[]>([])
-  const [cropMarginIncomingVersion, setCropMarginIncomingVersion] = useState(0)
+  const [cropMarginSources, setCropMarginSources] = useState<CropMarginSource[]>([])
+  const [cropMarginFocusSourceId, setCropMarginFocusSourceId] = useState('')
+  const [cropMarginFocusVersion, setCropMarginFocusVersion] = useState(0)
 
   const [upscaleProviders, setUpscaleProviders] = useState<UpscaleProviderConfig[]>(initialUpscaleStore.providers)
   const [currentUpscaleProviderId, setCurrentUpscaleProviderId] = useState(initialUpscaleStore.currentProviderId)
@@ -1864,15 +1866,19 @@ export default function App() {
     }
   }
 
-  function openCropMarginWithImages(images: CropMarginIncomingImage[], toastMessage: string) {
+  function openCropMarginWithImages(images: CropMarginIncomingImage[], toastMessage: string, shouldSwitchView = true) {
     if (!images.length) {
       showToast('没有可发送的图片', 'error')
       return
     }
 
-    setCropMarginIncomingImages(images)
-    setCropMarginIncomingVersion(current => current + 1)
-    setView('cropMargin')
+    const nextSources = images.map(normalizeCropMarginIncomingSource)
+    const focusSourceId = nextSources[0]?.id || ''
+    setCropMarginSources(current => mergeCropMarginSources(nextSources, current))
+    setCropMarginFocusSourceId(focusSourceId)
+    setCropMarginFocusVersion(current => current + 1)
+    if (shouldSwitchView)
+      setView('cropMargin')
     showToast(toastMessage, 'success')
   }
 
@@ -1924,7 +1930,7 @@ export default function App() {
   }
 
   function sendHistoryImagesToCropMargin(images: CropMarginIncomingImage[]) {
-    openCropMarginWithImages(images, `已发送 ${images.length} 张历史图片到裁剪台`)
+    openCropMarginWithImages(images, `已发送 ${images.length} 张历史图片到裁剪台`, false)
   }
 
   async function handleDownload(index: number) {
@@ -3551,7 +3557,7 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="shell-main">
+        <main className={`shell-main ${view === 'history' ? 'history-shell-main' : view === 'cropMargin' ? 'crop-margin-shell-main' : ''}`}>
           <div className="view-header">
             <div>
               <div className="view-kicker">Image Generator</div>
@@ -3566,8 +3572,10 @@ export default function App() {
             {view === 'cropMargin'
               ? (
                   <CropMarginView
-                    incomingImages={cropMarginIncomingImages}
-                    incomingVersion={cropMarginIncomingVersion}
+                    sources={cropMarginSources}
+                    onSourcesChange={setCropMarginSources}
+                    focusSourceId={cropMarginFocusSourceId}
+                    focusVersion={cropMarginFocusVersion}
                     onShowToast={showToast}
                   />
                 )

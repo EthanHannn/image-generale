@@ -3,7 +3,9 @@ type HistoryToolbarProps = {
   historyModelFilter: string
   historyFavoriteFilter: 'all' | 'favorites'
   historyModeFilter: 'all' | 'gen' | 'edit' | 'upscale'
+  totalCount: number
   favoriteCount: number
+  storageSummary: string
   modelFilterOptions: string[]
   onHistorySearchChange: (value: string) => void
   onHistoryModelFilterChange: (value: string) => void
@@ -18,7 +20,9 @@ export function HistoryToolbar(props: HistoryToolbarProps) {
     historyModelFilter,
     historyFavoriteFilter,
     historyModeFilter,
+    totalCount,
     favoriteCount,
+    storageSummary,
     modelFilterOptions,
     onHistorySearchChange,
     onHistoryModelFilterChange,
@@ -34,7 +38,10 @@ export function HistoryToolbar(props: HistoryToolbarProps) {
           <div className="history-toolbar-kicker">Asset Filters</div>
           <strong>快速定位你要回看的结果</strong>
         </div>
-        <button className="dl-btn history-clear-btn" type="button" onClick={() => void onClearHistory()}>清理未收藏</button>
+        <div className="history-toolbar-actions">
+          <span>{storageSummary}</span>
+          <button className="dl-btn history-clear-btn" type="button" onClick={() => void onClearHistory()}>清理未收藏</button>
+        </div>
       </div>
       <div className="history-toolbar">
         <div className="history-favorite-segment" role="group" aria-label="收藏筛选">
@@ -43,7 +50,7 @@ export function HistoryToolbar(props: HistoryToolbarProps) {
             type="button"
             onClick={() => onHistoryFavoriteFilterChange('all')}
           >
-            全部
+            全部 {totalCount}
           </button>
           <button
             className={historyFavoriteFilter === 'favorites' ? 'active' : ''}

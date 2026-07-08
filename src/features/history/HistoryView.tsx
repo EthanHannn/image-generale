@@ -58,11 +58,11 @@ export function HistoryView(props: HistoryViewProps) {
   const filterKeyRef = useRef('')
 
   const hasStorageLimit = storagePolicy.limitMode === 'limited' && !!storagePolicy.limitBytes
-  const storagePercent = hasStorageLimit ? Math.min((storageUsed / storagePolicy.limitBytes!) * 100, 100) : 0
+  const storageSummary = hasStorageLimit
+    ? `存储 ${formatSize(storageUsed)} / ${formatSize(storagePolicy.limitBytes!)}`
+    : `存储 ${formatSize(storageUsed)} · 无上限`
   const modelFilterOptions = historyOverview.modelIds
   const favoriteCount = historyOverview.favoriteCount
-  const latestRecord = historyOverview.latestRecord
-  const totalImages = historyOverview.totalImages
   const filterKey = `${historySearch}|${historyModelFilter}|${historyFavoriteFilter}|${historyModeFilter}`
   const totalPages = Math.max(1, Math.ceil(filteredTotal / HISTORY_PAGE_SIZE))
   const historyQuery = useMemo<HistoryPageQuery>(() => ({
@@ -124,65 +124,14 @@ export function HistoryView(props: HistoryViewProps) {
   return (
     <div className="view-panel-group">
       <section className="panel panel-large history-view-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>历史记录</h2>
-            <div className="panel-caption">集中浏览本地历史结果，支持搜索、筛选、回显与清理。</div>
-          </div>
-          <div className="result-meta-badge">
-            <span>{historyOverview.totalCount} 条</span>
-            <span>{formatSize(storageUsed)}</span>
-          </div>
-        </div>
-        <div className="storage-bar-wrap">
-          <div className="storage-bar-info">
-            <span className="storage-used">
-              {hasStorageLimit
-                ? `已用 ${formatSize(storageUsed)} / ${formatSize(storagePolicy.limitBytes!)}`
-                : `已用 ${formatSize(storageUsed)} · 未设置上限`}
-            </span>
-            {hasStorageLimit ? <span>{storagePercent.toFixed(1)}%</span> : <span>无限制</span>}
-          </div>
-          {hasStorageLimit
-            ? (
-                <div className="storage-bar-track">
-                  <div className={`storage-bar-fill ${storagePercent > 95 ? 'danger' : storagePercent > 80 ? 'warn' : ''}`} style={{ width: `${storagePercent}%` }} />
-                </div>
-              )
-            : null}
-        </div>
-        <div className="history-overview-grid">
-          <div className="history-overview-card">
-            <span className="history-overview-label">历史资产</span>
-            <strong>{historyOverview.totalCount}</strong>
-            <span className="history-overview-copy">当前已归档 {totalImages} 张图片，支持回显与二次筛选。</span>
-          </div>
-          <div className="history-overview-card">
-            <span className="history-overview-label">最新记录</span>
-            <strong>{latestRecord?.modelId || '暂无记录'}</strong>
-            <span className="history-overview-copy history-overview-copy--clamp">{latestRecord?.prompt || '生成图片后会在这里形成可回溯资产。'}</span>
-          </div>
-          <div className="history-overview-card">
-            <span className="history-overview-label">收藏记录</span>
-            <strong>{favoriteCount}</strong>
-            <span className="history-overview-copy">满意结果会在收藏筛选中集中呈现，并在清理时默认保留。</span>
-          </div>
-          <div className="history-overview-card">
-            <span className="history-overview-label">存储占用</span>
-            <strong>{hasStorageLimit ? `${storagePercent.toFixed(1)}%` : formatSize(storageUsed)}</strong>
-            <span className="history-overview-copy">
-              {hasStorageLimit
-                ? `当前上限 ${formatSize(storagePolicy.limitBytes!)}，接近上限时会自动清理最旧未收藏记录。`
-                : '当前未设置上限，历史记录不会被自动清理。'}
-            </span>
-          </div>
-        </div>
         <HistoryToolbar
           historySearch={historySearch}
           historyModelFilter={historyModelFilter}
           historyFavoriteFilter={historyFavoriteFilter}
           historyModeFilter={historyModeFilter}
+          totalCount={historyOverview.totalCount}
           favoriteCount={favoriteCount}
+          storageSummary={storageSummary}
           modelFilterOptions={modelFilterOptions}
           onHistorySearchChange={onHistorySearchChange}
           onHistoryModelFilterChange={onHistoryModelFilterChange}
