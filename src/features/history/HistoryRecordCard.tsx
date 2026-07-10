@@ -7,6 +7,7 @@ import { getRecord, saveHistoryThumbnails, type HistoryRecord } from '../../lib/
 import { blobToBase64, detectImageMimeType, formatSize, formatTime, sanitizeFilename } from '../../lib/utils'
 import { Icon, type IconName } from '../../components/Icon'
 import type { CropMarginIncomingImage, CropMarginVariant } from '../crop-margin/types'
+import { createHistoryThumbnails } from './historyThumbnails'
 
 const EMPTY_HISTORY_IMAGES: Blob[] = []
 type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
@@ -607,50 +608,6 @@ function getHistorySizeLabel(record: HistoryRecord) {
 
 function hasFullHistoryImages(record: HistoryRecord) {
   return getHistoryDisplayImages(record).length > 0
-}
-
-async function createHistoryThumbnails(images: Blob[]) {
-  const thumbnails: Blob[] = []
-  for (const image of images)
-    thumbnails.push(await createHistoryThumbnail(image))
-  return thumbnails
-}
-
-function createHistoryThumbnail(blob: Blob) {
-  return new Promise<Blob>((resolve, reject) => {
-    const url = URL.createObjectURL(blob)
-    const image = new Image()
-    image.onload = () => {
-      const maxWidth = 360
-      const ratio = image.naturalWidth > maxWidth ? maxWidth / image.naturalWidth : 1
-      const width = Math.max(1, Math.round(image.naturalWidth * ratio))
-      const height = Math.max(1, Math.round(image.naturalHeight * ratio))
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const context = canvas.getContext('2d')
-      if (!context) {
-        URL.revokeObjectURL(url)
-        reject(new Error('缩略图生成失败'))
-        return
-      }
-
-      context.drawImage(image, 0, 0, width, height)
-      canvas.toBlob((thumbnail) => {
-        URL.revokeObjectURL(url)
-        if (!thumbnail) {
-          reject(new Error('缩略图生成失败'))
-          return
-        }
-        resolve(thumbnail)
-      }, 'image/webp', 0.76)
-    }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error('缩略图生成失败'))
-    }
-    image.src = url
-  })
 }
 
 function getHistoryDisplayImages(record: HistoryRecord) {

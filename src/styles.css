@@ -1895,6 +1895,12 @@ button:disabled {
   font-size: 11px;
 }
 
+.target-option-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .auto-upscale-toggle {
   display: inline-flex;
   align-items: center;

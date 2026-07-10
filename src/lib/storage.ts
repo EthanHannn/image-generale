@@ -50,6 +50,7 @@ export type RequestParams = {
   targetHeight?: number
   generationWidth?: number
   generationHeight?: number
+  compressTo1k?: boolean
   autoUpscale?: boolean
   autoUpscaleFactor?: number
   standaloneUpscale?: boolean

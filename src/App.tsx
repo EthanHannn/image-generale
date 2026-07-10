@@ -6,6 +6,7 @@ import { CropMarginView } from './features/crop-margin/CropMarginView'
 import { mergeCropMarginSources, normalizeCropMarginIncomingSource } from './features/crop-margin/cropMarginQueue'
 import type { CropMarginIncomingImage, CropMarginSource, CropMarginVariant } from './features/crop-margin/types'
 import { HistoryView } from './features/history/HistoryView'
+import { createHistoryThumbnails } from './features/history/historyThumbnails'
 import { hydrateModels, type ModelPreset, type RemoteModel } from './lib/models'
 import {
   DEFAULT_HISTORY_STORAGE_LIMIT_BYTES,
@@ -93,6 +94,7 @@ type TargetSizeState = {
   ratioText: string
   targetWidth: number
   targetHeight: number
+  compressTo1k: boolean
   autoUpscale: boolean
 }
 type TargetSizeDraft = {
@@ -199,6 +201,7 @@ const defaultTargetSize: TargetSizeState = {
   ratioText: '1:1',
   targetWidth: 1024,
   targetHeight: 1024,
+  compressTo1k: true,
   autoUpscale: false,
 }
 
@@ -1495,6 +1498,10 @@ export default function App() {
     setTargetSize(current => ({ ...current, autoUpscale }))
   }
 
+  function updateCompressTo1k(compressTo1k: boolean) {
+    setTargetSize(current => ({ ...current, compressTo1k }))
+  }
+
   function removeRefFile(index: number) {
     setRefFiles(current => current.filter((_, currentIndex) => currentIndex !== index))
   }
@@ -1708,6 +1715,7 @@ export default function App() {
     if (!imageBlobs.length)
       return null
 
+    const thumbnails = await makeHistoryThumbnails(imageBlobs)
     const nextParams: RequestParams = {
       n: params.n,
       size: plan.requestSize,
@@ -1722,6 +1730,7 @@ export default function App() {
       targetHeight: plan.targetHeight,
       generationWidth: plan.generationWidth,
       generationHeight: plan.generationHeight,
+      compressTo1k: targetSize.compressTo1k,
       autoUpscale: targetSize.autoUpscale,
       autoUpscaleFactor: plan.autoUpscaleFactor || undefined,
     }
@@ -1736,10 +1745,11 @@ export default function App() {
       prompt: requestPrompt,
       params: nextParams,
       images: imageBlobs,
+      thumbnails,
       imageCount: imageBlobs.length,
       duration,
       requestJson: nextRequestJson,
-      totalSize: totalSize + JSON.stringify(nextParams).length + requestPrompt.length,
+      totalSize: totalSize + getBlobTotalSize(thumbnails) + JSON.stringify(nextParams).length + requestPrompt.length,
       isFavorite: false,
       favoritedAt: null,
     }
@@ -2207,6 +2217,7 @@ export default function App() {
       }
       const outputBlob = base64ToBlob(out.imageBase64)
       const sourceBlob = base64ToBlob(standaloneUpscale.sourceBase64)
+      const thumbnails = await makeHistoryThumbnails([outputBlob, sourceBlob])
       const nextRecord: HistoryRecord = {
         timestamp: Date.now(),
         providerId: currentUpscaleProvider?.id || 'upscale',
@@ -2217,6 +2228,7 @@ export default function App() {
         prompt: standaloneUpscale.fileName || '独立超分',
         params: nextParams,
         images: [sourceBlob],
+        thumbnails,
         imageCount: 1,
         duration,
         requestJson: JSON.stringify({
@@ -2234,7 +2246,7 @@ export default function App() {
             scale: out.scale || standaloneUpscale.factor,
           },
         }, null, 2),
-        totalSize: sourceBlob.size + outputBlob.size + JSON.stringify(nextParams).length,
+        totalSize: sourceBlob.size + outputBlob.size + getBlobTotalSize(thumbnails) + JSON.stringify(nextParams).length,
         upscaledImages: {
           0: {
             [standaloneUpscale.factor]: outputBlob,
@@ -2815,10 +2827,17 @@ export default function App() {
                 </div>
               </div>
 
-              <label className="auto-upscale-toggle">
-                <input type="checkbox" checked={targetSize.autoUpscale} onChange={event => updateAutoUpscale(event.target.checked)} />
-                <span>自动超分</span>
-              </label>
+              <div className="target-option-stack">
+                <label className="auto-upscale-toggle">
+                  <input type="checkbox" checked={targetSize.compressTo1k !== false} onChange={event => updateCompressTo1k(event.target.checked)} />
+                  <span>压缩到 1K</span>
+                </label>
+
+                <label className="auto-upscale-toggle">
+                  <input type="checkbox" checked={targetSize.autoUpscale} onChange={event => updateAutoUpscale(event.target.checked)} />
+                  <span>自动超分</span>
+                </label>
+              </div>
 
               {sizePlan
                 ? (
@@ -4156,6 +4175,19 @@ function chooseUpscaleFactor(requiredScale: number): UpscaleFactor | null {
   return null
 }
 
+async function makeHistoryThumbnails(images: Blob[]) {
+  try {
+    return await createHistoryThumbnails(images)
+  }
+  catch {
+    return []
+  }
+}
+
+function getBlobTotalSize(blobs: Blob[]) {
+  return blobs.reduce((sum, blob) => sum + blob.size, 0)
+}
+
 function createSizePlan(size: TargetSizeState): SizePlanResult {
   const targetWidth = clampInteger(size.targetWidth, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
   let targetHeight = clampInteger(size.targetHeight, TARGET_SIZE_MIN, TARGET_SIZE_MAX)
@@ -4168,7 +4200,7 @@ function createSizePlan(size: TargetSizeState): SizePlanResult {
   }
 
   const targetArea = targetWidth * targetHeight
-  if (targetArea <= GENERATION_MAX_AREA) {
+  if (size.compressTo1k === false || targetArea <= GENERATION_MAX_AREA) {
     return {
       plan: {
         targetWidth,
@@ -4222,6 +4254,7 @@ function makeTargetSizeFromPreset(size: string): TargetSizeState {
       ratioText: formatRatioFromSize(parsedSize.width, parsedSize.height),
       targetWidth: parsedSize.width,
       targetHeight: parsedSize.height,
+      compressTo1k: true,
       autoUpscale: false,
     }
   }
@@ -4233,6 +4266,7 @@ function makeTargetSizeFromPreset(size: string): TargetSizeState {
       ratioText: size,
       targetWidth: 1024,
       targetHeight: getHeightByRatio(1024, ratio),
+      compressTo1k: true,
       autoUpscale: false,
     }
   }
@@ -4261,6 +4295,7 @@ function makeTargetSizeFromParams(params: RequestParams): TargetSizeState {
       ratioText: params.targetRatio || formatRatioFromSize(params.targetWidth, params.targetHeight),
       targetWidth: params.targetWidth,
       targetHeight: params.targetHeight,
+      compressTo1k: params.compressTo1k !== false,
       autoUpscale: !!params.autoUpscale,
     }
   }
