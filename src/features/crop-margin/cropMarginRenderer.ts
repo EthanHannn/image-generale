@@ -36,7 +36,7 @@ export async function renderCropMarginImage(options: RenderCropMarginOptions): P
   if (!context)
     throw new Error('当前环境无法创建画布')
 
-  context.imageSmoothingEnabled = false
+  context.imageSmoothingEnabled = true
   context.clearRect(0, 0, outputWidth, outputHeight)
   context.drawImage(image, 0, 0, options.sourceWidth, options.sourceHeight)
   drawMarginArea(context, options.sourceWidth, marginWidth, outputHeight, options.template, badgeImage)
@@ -158,9 +158,9 @@ function drawBadgeImage(
   if (!badgeImage)
     return
 
-  const size = Math.max(42, Math.min(92, Math.round(width * 0.42), Math.round(height * 0.16)))
+  const size = getBadgeSize(width, height)
   const centerX = startX + width / 2
-  const centerY = Math.max(size * 0.9, height * 0.34)
+  const centerY = getBadgeCenterY(width, height)
   context.drawImage(badgeImage, centerX - size / 2, centerY - size / 2, size, size)
 }
 
@@ -172,9 +172,9 @@ function drawText(
   template: CropMarginTemplate,
 ) {
   const centerX = startX + width / 2
-  const titleSize = Math.max(18, Math.min(34, Math.round(width * 0.15)))
-  const subSize = Math.max(12, Math.min(18, Math.round(width * 0.075)))
-  const titleY = Math.max(height * 0.54, Math.min(height - 72, height * 0.58))
+  const titleY = getTitleY(width, height)
+  const titleSize = getTitleSize(width)
+  const subSize = getSubSize(width)
 
   context.textAlign = 'center'
   context.textBaseline = 'middle'
@@ -184,5 +184,33 @@ function drawText(
 
   context.fillStyle = template.subtext
   context.font = `500 ${subSize}px "Microsoft YaHei", sans-serif`
-  context.fillText(template.id === 'clean' ? '发布后裁掉这里' : template.id === 'note' ? '水印留在这里' : '保留原图完整', centerX, titleY + titleSize * 1.35)
+  context.fillText(template.id === 'clean' ? '发布后裁掉这里' : template.id === 'note' ? '水印留在这里' : '保留原图完整', centerX, titleY + titleSize * 1.2)
+}
+
+function getBadgeSize(width: number, height: number) {
+  return Math.max(44, Math.min(96, Math.round(width * 0.44), Math.round(height * 0.17)))
+}
+
+function getTitleSize(width: number) {
+  return Math.max(18, Math.min(34, Math.round(width * 0.15)))
+}
+
+function getSubSize(width: number) {
+  return Math.max(12, Math.min(18, Math.round(width * 0.075)))
+}
+
+function getBadgeCenterY(width: number, height: number) {
+  const size = getBadgeSize(width, height)
+  const titleSize = getTitleSize(width)
+  return getTitleY(width, height) - size / 2 - titleSize * 0.9
+}
+
+function getTitleY(width: number, height: number) {
+  const size = getBadgeSize(width, height)
+  const titleSize = getTitleSize(width)
+  const subSize = getSubSize(width)
+  const centeredTitleY = height / 2 + size / 2 - titleSize * 0.15 - subSize * 0.25
+  const minTitleY = size + titleSize * 0.9
+  const maxTitleY = height - titleSize * 1.2 - subSize / 2
+  return Math.min(Math.max(centeredTitleY, minTitleY), maxTitleY)
 }
