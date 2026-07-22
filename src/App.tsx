@@ -89,6 +89,7 @@ type ImagePreviewState = {
 type HistoryFavoriteFilter = 'all' | 'favorites'
 type HistoryModeFilter = 'all' | 'gen' | 'edit' | 'upscale'
 type TargetSizeMode = 'ratio' | 'manual'
+type ReferenceRole = 'style' | 'character'
 type TargetSizeState = {
   mode: TargetSizeMode
   ratioText: string
@@ -212,19 +213,21 @@ const defaultTargetSizeDraft: TargetSizeDraft = {
 
 function getInitialTheme(): ThemeName {
   const saved = localStorage.getItem(THEME_KEY)
-  if (saved === 'light' || saved === 'dark')
+  if (saved === 'light' || saved === 'dark' || saved === 'system')
     return saved
 
-  if (window.matchMedia?.('(prefers-color-scheme: light)').matches)
-    return 'light'
+  return 'system'
+}
 
-  return 'dark'
+function getSystemTheme(): Exclude<ThemeName, 'system'> {
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
 }
 
 export default function App() {
   const initialConfig = loadConfig()
   const initialUpscaleStore = loadUpscaleProviders()
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const styleFileInputRef = useRef<HTMLInputElement | null>(null)
+  const characterFileInputRef = useRef<HTMLInputElement | null>(null)
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null)
   const toastTimerRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
@@ -234,6 +237,7 @@ export default function App() {
   const dragDepthRef = useRef(0)
 
   const [theme, setTheme] = useState<ThemeName>(getInitialTheme)
+  const [systemTheme, setSystemTheme] = useState<Exclude<ThemeName, 'system'>>(getSystemTheme)
   const [providers, setProviders] = useState<ProviderConfig[]>(initialConfig.providers)
   const [currentProviderId, setCurrentProviderId] = useState(initialConfig.currentProviderId)
   const [providerDraft, setProviderDraft] = useState<ProviderConfig>({
@@ -256,7 +260,8 @@ export default function App() {
   const [params, setParams] = useState<RequestParams>(emptyParams)
   const [targetSize, setTargetSize] = useState<TargetSizeState>(defaultTargetSize)
   const [targetSizeDraft, setTargetSizeDraft] = useState<TargetSizeDraft>(defaultTargetSizeDraft)
-  const [refFiles, setRefFiles] = useState<File[]>([])
+  const [styleReferenceFile, setStyleReferenceFile] = useState<File | null>(null)
+  const [characterReferenceFile, setCharacterReferenceFile] = useState<File | null>(null)
   const [requestJson, setRequestJson] = useState('无')
   const [upscaleResponseJson, setUpscaleResponseJson] = useState('无')
   const [resultTimer, setResultTimer] = useState('')
@@ -325,12 +330,26 @@ export default function App() {
     : historyRecordCache[standaloneUpscale.activeRecordId] || null
   const standaloneFavoritePending = standaloneUpscale.activeRecordId === null ? false : !!favoritePendingIds[standaloneUpscale.activeRecordId]
   const resolutionOptions = currentModel?.supportedResolutions || []
+  const characterReferenceEnabled = (currentModel?.maxInputImages || 0) >= 2
+  const refFiles = [styleReferenceFile, characterReferenceEnabled ? characterReferenceFile : null].filter((file): file is File => !!file)
+  const resolvedTheme = theme === 'system' ? systemTheme : theme
   const sizePlanResult = createSizePlan(targetSize)
   const sizePlan = sizePlanResult.plan
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-  }, [theme])
+    document.documentElement.setAttribute('data-theme', resolvedTheme)
+  }, [resolvedTheme])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.('(prefers-color-scheme: light)')
+    if (!mediaQuery)
+      return
+
+    const updateSystemTheme = () => setSystemTheme(mediaQuery.matches ? 'light' : 'dark')
+    updateSystemTheme()
+    mediaQuery.addEventListener('change', updateSystemTheme)
+    return () => mediaQuery.removeEventListener('change', updateSystemTheme)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -453,6 +472,13 @@ export default function App() {
       if (event.defaultPrevented)
         return
 
+      if (event.key === 'Escape' && globalDropTarget) {
+        event.preventDefault()
+        dragDepthRef.current = 0
+        setGlobalDropTarget(null)
+        return
+      }
+
       if (event.key === 'Escape' && imageContextMenu) {
         event.preventDefault()
         closeImageContextMenu()
@@ -500,7 +526,7 @@ export default function App() {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [imageContextMenu, previewImage, providerModalOpen, upscaleModalOpen, isGenerating])
+  }, [globalDropTarget, imageContextMenu, previewImage, providerModalOpen, upscaleModalOpen, isGenerating])
 
   useEffect(() => {
     closeImageContextMenu()
@@ -662,10 +688,9 @@ export default function App() {
         }
       }
       return {
-        status: 'ready',
-        kind: 'workspace',
-        title: '拖放文件作为参考图',
-        hint: '松开后载入 JPG / PNG / WebP 等图片文件。',
+        status: 'blocked',
+        title: '请选择参考图用途',
+        hint: '请将图片拖到风格图或角色图对应的区域。',
       }
     }
 
@@ -701,25 +726,6 @@ export default function App() {
     }
   }
 
-  function acceptWorkspaceDropFiles(files: File[]) {
-    if (!files.length)
-      return
-
-    const maxFiles = currentModel?.maxInputImages ?? files.length
-    if (maxFiles <= 0) {
-      showToast('当前模型不支持参考图', 'error')
-      return
-    }
-
-    const nextFiles = files.slice(0, maxFiles)
-    setRefFiles(nextFiles)
-    if (files.length > nextFiles.length) {
-      showToast(`已载入 ${nextFiles.length} 张参考图，超过上限的已忽略`, 'success')
-      return
-    }
-    showToast(`已载入 ${nextFiles.length} 张参考图`, 'success')
-  }
-
   function handleGlobalDrop(event: globalThis.DragEvent) {
     const dropTarget = getGlobalDropTarget()
     const imageFiles = getImageFiles(event.dataTransfer?.files)
@@ -730,11 +736,6 @@ export default function App() {
 
     if (dropTarget.status === 'blocked') {
       showToast(dropTarget.title, 'error')
-      return
-    }
-
-    if (dropTarget.kind === 'workspace') {
-      acceptWorkspaceDropFiles(imageFiles)
       return
     }
 
@@ -857,19 +858,20 @@ export default function App() {
     image: string,
     title: string,
     compare?: ImagePreviewState['compare'],
+    initialMode: ImagePreviewState['mode'] = 'compare',
   ) {
     setPreviewDragging(false)
     const singleSide = compare && image === compare.before ? 'before' : 'after'
     setPreviewImage({
       image,
       title,
-      mode: compare ? 'compare' : 'single',
+      mode: compare ? initialMode : 'single',
       split: 50,
       zoom: 1,
       fitZoom: 1,
       offsetX: 0,
       offsetY: 0,
-      singleSide: compare ? 'before' : singleSide,
+      singleSide,
       sideFitZooms: {},
       compare,
     })
@@ -1381,8 +1383,32 @@ export default function App() {
     }))
   }
 
-  function onFileChange(files: FileList | null) {
-    acceptWorkspaceDropFiles(Array.from(files || []))
+  function setReferenceFile(role: ReferenceRole, files: FileList | File[] | null) {
+    const file = Array.from(files || []).find(candidate => candidate.type.startsWith('image/'))
+    if (!file) {
+      showToast('请选择图片文件', 'error')
+      return
+    }
+    if (!currentModel || currentModel.maxInputImages <= 0) {
+      showToast('当前模型不支持参考图', 'error')
+      return
+    }
+    if (role === 'character' && currentModel.maxInputImages < 2) {
+      showToast('当前模型仅支持 1 张参考图，无法添加角色图', 'error')
+      return
+    }
+
+    if (role === 'style')
+      setStyleReferenceFile(file)
+    else
+      setCharacterReferenceFile(file)
+    showToast(`已更新${role === 'style' ? '风格图' : '角色图'}`, 'success')
+  }
+
+  function handleReferenceDrop(event: DragEvent<HTMLButtonElement>, role: ReferenceRole) {
+    event.preventDefault()
+    event.stopPropagation()
+    setReferenceFile(role, event.dataTransfer.files)
   }
 
   function updateTargetSizeMode(mode: TargetSizeMode) {
@@ -1502,8 +1528,11 @@ export default function App() {
     setTargetSize(current => ({ ...current, compressTo1k }))
   }
 
-  function removeRefFile(index: number) {
-    setRefFiles(current => current.filter((_, currentIndex) => currentIndex !== index))
+  function removeReferenceFile(role: ReferenceRole) {
+    if (role === 'style')
+      setStyleReferenceFile(null)
+    else
+      setCharacterReferenceFile(null)
   }
 
   async function generate() {
@@ -1530,7 +1559,7 @@ export default function App() {
       return
     }
     const currentSizePlan = currentSizePlanResult.plan
-    const requestPrompt = makeRequestPrompt(prompt.trim(), currentSizePlan, targetSize, params.promptSizeHint === 'true')
+    let requestPrompt = makeRequestPrompt(prompt.trim(), currentSizePlan, targetSize, params.promptSizeHint === 'true')
     if (targetSize.autoUpscale && currentSizePlan.needsUpscale && !isUpscaleProviderConfigured(currentUpscaleProvider)) {
       setGenStatus({ type: 'err', message: '自动超分需要先配置超分服务' })
       return
@@ -1550,6 +1579,7 @@ export default function App() {
         useRefFiles = useRefFiles.slice(0, currentModel.maxInputImages)
         setGenStatus({ type: 'warn', message: `参考图超过上限 ${currentModel.maxInputImages} 张，将只取前 ${currentModel.maxInputImages} 张` })
       }
+      requestPrompt = makeEditReferencePrompt(requestPrompt, useRefFiles.length)
     }
 
     const controller = new AbortController()
@@ -2150,6 +2180,8 @@ export default function App() {
   function handleStandaloneDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault()
     event.stopPropagation()
+    dragDepthRef.current = 0
+    setGlobalDropTarget(null)
     const file = event.dataTransfer.files?.[0]
     if (file)
       void handleStandaloneUpscaleFile(file)
@@ -2533,6 +2565,7 @@ export default function App() {
     { id: 'history', label: '历史记录', icon: 'navHistory', hint: '资产浏览' },
     { id: 'settings', label: '设置', icon: 'navSettings', hint: '系统与配置' },
   ]
+  const nextSidebarTheme: ThemeName = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'
   const viewTitle = view === 'workspace' ? '工作台' : view === 'upscale' ? '超分' : view === 'cropMargin' ? '裁剪台' : view === 'history' ? '历史记录' : '设置'
   const viewDesc = view === 'workspace'
     ? '围绕当前供应商与模型完成图片生成和结果处理。'
@@ -2639,24 +2672,59 @@ export default function App() {
                   <div className="edit-upload">
                     <label>
                       参考图
-                      <span className="accent-inline">（上限: {currentModel?.maxInputImages || 0} 张）</span>
+                      <span className="accent-inline">（提交时固定按风格图、角色图排序）</span>
                     </label>
-                    <button className="upload-zone" type="button" onClick={() => fileInputRef.current?.click()}>
-                      <div className="upload-icon"><Icon name="upload" size={24} /></div>
-                      <div className="upload-text">点击上传参考图</div>
-                      <div className="upload-hint">支持多选 · JPG / PNG / WebP</div>
-                    </button>
-                    <input ref={fileInputRef} hidden type="file" accept="image/*" multiple onChange={event => onFileChange(event.target.files)} />
-                    <div className="ref-preview">
-                      {refFiles.map((file, index) => (
-                        <div key={`${file.name}_${index}`} className="ref-item">
-                          <img src={URL.createObjectURL(file)} alt={file.name} />
-                          <button className="ref-remove" type="button" onClick={() => removeRefFile(index)} aria-label="移除参考图">
-                            <Icon name="close" size={12} />
-                          </button>
-                          <div className="ref-name">{file.name}</div>
-                        </div>
-                      ))}
+                    <div className="reference-upload-grid">
+                      {([
+                        { role: 'style' as const, label: '风格图', hint: '提取画面风格、色彩、光影与构图' },
+                        { role: 'character' as const, label: '角色图', hint: '保留人物身份、面部、服装与体态' },
+                      ]).map(({ role, label, hint }) => {
+                        const disabled = role === 'character' && !characterReferenceEnabled
+                        const file = role === 'style' ? styleReferenceFile : disabled ? null : characterReferenceFile
+                        const inputRef = role === 'style' ? styleFileInputRef : characterFileInputRef
+                        return (
+                          <div key={role} className={`reference-upload-card ${file ? 'has-file' : ''} ${disabled ? 'is-disabled' : ''}`}>
+                            <div className="reference-upload-head">
+                              <strong>{label}</strong>
+                              <span>{file ? '已添加' : disabled ? '当前模型不可用' : '待添加'}</span>
+                            </div>
+                            <button
+                              className="upload-zone reference-upload-zone"
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => inputRef.current?.click()}
+                              onDragOver={event => event.preventDefault()}
+                              onDrop={event => handleReferenceDrop(event, role)}
+                            >
+                              {file
+                                ? <img src={URL.createObjectURL(file)} alt={`${label}预览`} />
+                                : <Icon name="upload" size={22} />}
+                              <span>{file ? '点击替换或拖入图片' : `点击添加${label}`}</span>
+                            </button>
+                            <p>{hint}</p>
+                            {file
+                              ? (
+                                  <div className="reference-file-row">
+                                    <span title={file.name}>{file.name}</span>
+                                    <button type="button" onClick={() => removeReferenceFile(role)} aria-label={`移除${label}`}>
+                                      <Icon name="close" size={12} />
+                                    </button>
+                                  </div>
+                                )
+                              : null}
+                            <input
+                              ref={inputRef}
+                              hidden
+                              type="file"
+                              accept="image/*"
+                              onChange={(event) => {
+                                setReferenceFile(role, event.target.files)
+                                event.target.value = ''
+                              }}
+                            />
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )
@@ -3217,6 +3285,7 @@ export default function App() {
                                 afterLabel: `${standaloneUpscale.factor}X 超分图`,
                               }
                             : undefined,
+                          'single',
                         )}
                       />
                       <button className="history-action-btn standalone-send-btn" type="button" onClick={() => sendStandaloneSourceToCropMargin()}>
@@ -3260,6 +3329,7 @@ export default function App() {
                                 afterLabel: `${standaloneUpscale.factor}X 超分图`,
                               }
                             : undefined,
+                          'single',
                         )}
                       />
                       <button className="history-action-btn standalone-send-btn" type="button" onClick={() => sendStandaloneOutputToCropMargin()}>
@@ -3331,8 +3401,8 @@ export default function App() {
             </div>
             <div className="settings-overview-card">
               <span className="settings-overview-label">主题外观</span>
-              <strong>{theme === 'dark' ? '深色' : '浅色'}</strong>
-              <span className="settings-overview-copy">切换后会立即同步到整个桌面工作台。</span>
+              <strong>{theme === 'system' ? '跟随系统' : theme === 'dark' ? '深色' : '浅色'}</strong>
+              <span className="settings-overview-copy">当前显示为{resolvedTheme === 'dark' ? '深色' : '浅色'}界面。</span>
             </div>
           </div>
         </section>
@@ -3506,20 +3576,35 @@ export default function App() {
           <div className="panel-heading">
             <div>
               <h2>外观主题</h2>
-              <div className="panel-caption">深浅主题切换会立即同步到整个工作台。</div>
+              <div className="panel-caption">选择深色、浅色或跟随系统，偏好会立即保存并同步到整个工作台。</div>
             </div>
           </div>
           <div className="theme-setting-card">
             <div className="theme-mode-label">
               <span className="theme-swatch current" />
               <div>
-                <strong>{theme === 'dark' ? '深色主题' : '浅色主题'}</strong>
-                <div className="small-note">当前主题用于整个桌面客户端视图。</div>
+                <strong>{theme === 'system' ? '跟随系统主题' : theme === 'dark' ? '深色主题' : '浅色主题'}</strong>
+                <div className="small-note">当前显示为{resolvedTheme === 'dark' ? '深色' : '浅色'}界面。</div>
               </div>
             </div>
-            <button type="button" onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}>
-              切换主题
-            </button>
+            <div className="theme-mode-options" role="radiogroup" aria-label="主题选择">
+              {([
+                { value: 'dark' as const, label: '深色' },
+                { value: 'light' as const, label: '浅色' },
+                { value: 'system' as const, label: '跟随系统' },
+              ]).map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={theme === option.value}
+                  className={theme === option.value ? 'active' : ''}
+                  onClick={() => setTheme(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
         </section>
       </div>
@@ -3580,10 +3665,10 @@ export default function App() {
             <button
               className="theme-toggle-icon"
               type="button"
-              title={theme === 'dark' ? '切换到浅色' : '切换到深色'}
-              onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
+              title={`当前${theme === 'system' ? '跟随系统' : theme === 'dark' ? '深色' : '浅色'}，点击切换到${nextSidebarTheme === 'system' ? '跟随系统' : nextSidebarTheme === 'dark' ? '深色' : '浅色'}`}
+              onClick={() => setTheme(nextSidebarTheme)}
             >
-              <Icon name={theme === 'dark' ? 'themeLight' : 'themeDark'} size={19} strokeWidth={1.8} />
+              <Icon name={theme === 'system' ? 'themeSystem' : theme === 'dark' ? 'themeDark' : 'themeLight'} size={20} strokeWidth={1.7} />
             </button>
           </div>
         </aside>
@@ -4286,6 +4371,13 @@ function makeRequestPrompt(prompt: string, plan: SizePlan, targetSize: TargetSiz
     return prompt
 
   return `${prompt} ${suffix}`.trim()
+}
+
+function makeEditReferencePrompt(prompt: string, referenceCount: number) {
+  if (referenceCount < 2)
+    return prompt
+
+  return `${prompt}\n\n参考图使用规则：第 1 张仅用于提取画面风格、色彩、光影与构图语言；第 2 张仅用于保留角色的身份、面部特征、发型、服装与体态。请以第 2 张角色为主体，使用第 1 张的视觉风格生成新画面。`
 }
 
 function makeTargetSizeFromParams(params: RequestParams): TargetSizeState {

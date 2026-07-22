@@ -13,6 +13,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 type HmacSha1 = Hmac<Sha1>;
@@ -1296,6 +1297,7 @@ const ALIYUN_UPSCALE_MAX_BYTES: usize = 20 * 1024 * 1024;
 const ALIYUN_UPSCALE_MIN_SIDE: u32 = 64;
 const ALIYUN_UPSCALE_MAX_LONG_SIDE: u32 = 5000;
 const ALIYUN_UPSCALE_MAX_ASPECT_RATIO: f64 = 2.0;
+const ALIYUN_RESULT_DOWNLOAD_RETRY_DELAYS_MS: [u64; 3] = [500, 1_000, 2_000];
 
 // RFC 3986 percent-encode，仅保留 unreserved chars
 fn percent_encode(s: &str) -> String {
@@ -1843,6 +1845,45 @@ async fn poll_super_resolution(
     ))
 }
 
+async fn download_aliyun_result_image(
+    client: &reqwest::Client,
+    result_url: reqwest::Url,
+) -> Result<Vec<u8>, String> {
+    let mut last_error = String::new();
+
+    for attempt in 0..=ALIYUN_RESULT_DOWNLOAD_RETRY_DELAYS_MS.len() {
+        match client.get(result_url.clone()).send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    match response.bytes().await {
+                        Ok(bytes) => return Ok(bytes.to_vec()),
+                        Err(error) => last_error = format!("读取结果数据失败: {}", error),
+                    }
+                } else {
+                    let body = response.text().await.unwrap_or_default();
+                    let error = format!("下载结果图片失败 HTTP {}: {}", status.as_u16(), body);
+                    if !status.is_server_error() {
+                        return Err(error);
+                    }
+                    last_error = error;
+                }
+            }
+            Err(error) => last_error = format!("下载结果图片失败: {}", error),
+        }
+
+        if let Some(delay) = ALIYUN_RESULT_DOWNLOAD_RETRY_DELAYS_MS.get(attempt) {
+            sleep(Duration::from_millis(*delay)).await;
+        }
+    }
+
+    Err(format!(
+        "{}（已重试 {} 次）",
+        last_error,
+        ALIYUN_RESULT_DOWNLOAD_RETRY_DELAYS_MS.len()
+    ))
+}
+
 // 阿里云超分 Tauri 命令
 #[tauri::command]
 async fn aliyun_upscale(
@@ -1887,25 +1928,7 @@ async fn aliyun_upscale(
     let result_url = clean_result_url(&result_url);
     let parsed_result_url = reqwest::Url::parse(&result_url)
         .map_err(|e| format!("结果图片 URL 无效: {}，原始值: {}", e, result_url))?;
-    let result_resp = client
-        .get(parsed_result_url)
-        .send()
-        .await
-        .map_err(|e| format!("下载结果图片失败: {}", e))?;
-    let result_status = result_resp.status();
-    if !result_status.is_success() {
-        let body = result_resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "下载结果图片失败 HTTP {}: {}",
-            result_status.as_u16(),
-            body
-        ));
-    }
-    let result_bytes = result_resp
-        .bytes()
-        .await
-        .map_err(|e| format!("读取结果数据失败: {}", e))?
-        .to_vec();
+    let result_bytes = download_aliyun_result_image(&client, parsed_result_url).await?;
 
     // 6. 解析结果尺寸，保存到历史目录
     let (result_w, result_h) =

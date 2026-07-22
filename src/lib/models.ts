@@ -112,7 +112,7 @@ export const MODEL_PRESETS: Record<string, ModelPreset> = {
     description: 'Multi-reference control, unmatched photorealism, 4K.',
     sizeFormat: 'named',
     maxGenerations: 1,
-    maxInputImages: 1,
+    maxInputImages: 2,
     creditPerImage: 6,
     defaultSize: 'square_hd',
     defaultResolution: '720p',

@@ -42,17 +42,16 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
     [fullRecord],
   )
   const { urls: imageUrls, isLoading: imageUrlsLoading } = useObjectUrls(displayImages)
-  const { urls: previewImageUrls, isLoading: previewImageUrlsLoading } = useObjectUrls(previewImages)
+  const { urls: previewImageUrls } = useObjectUrls(previewImages)
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(null)
   const promptSummary = record.prompt || '(无 Prompt)'
   const modeText = getHistoryModeText(record.mode)
   const sizeLabel = getHistorySizeLabel(record)
   const titleLabel = record.mode === 'upscale' ? (record.providerName || record.modelName || '超分服务') : record.modelId
-  const activePreviewUrls = previewImageUrls.length ? previewImageUrls : imageUrls
-  const previewUrl = previewIndex !== null ? activePreviewUrls[previewIndex] : ''
-  const previewTotal = Math.max(activePreviewUrls.length, displayImages.length, record.imageCount || 0)
-  const hasPreview = previewIndex !== null && (!!previewUrl || previewImageUrlsLoading)
+  const previewUrl = previewIndex !== null ? previewImageUrls[previewIndex] : ''
+  const previewTotal = Math.max(previewImageUrls.length, previewImages.length, displayImages.length, record.imageCount || 0)
+  const hasPreview = previewIndex !== null
   const hasMultipleImages = previewTotal > 1
   const canUseRecordImages = record.imageCount > 0 || displayImages.length > 0
 

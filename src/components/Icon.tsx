@@ -26,6 +26,7 @@ export type IconName =
   | 'sun'
   | 'themeDark'
   | 'themeLight'
+  | 'themeSystem'
   | 'upscale'
   | 'upload'
   | 'workspace'
@@ -132,43 +133,44 @@ function renderIconPath(name: IconName) {
     case 'navHistory':
       return (
         <>
-          <circle cx="12" cy="12" r="7.2" />
-          <circle cx="12" cy="12" r="2.2" />
-          <circle cx="17.2" cy="7.8" r=".85" fill="currentColor" stroke="none" />
+          <path d="M18.7 8.2A7.6 7.6 0 1 0 19 14" />
+          <path d="M5.5 7.9 4.2 11l3.2.5" />
+          <path d="M12 8.1v4.2l3 1.8" />
+          <circle cx="17.8" cy="7" r=".9" fill="currentColor" stroke="none" />
         </>
       )
     case 'navCrop':
       return (
         <>
-          <path d="M7 4v13a3 3 0 0 0 3 3h10" />
-          <path d="M4 7h10a3 3 0 0 1 3 3v10" />
-          <path d="M8.4 8.4 15.6 15.6" />
-          <path d="M14.6 8.8 16.2 7l1.6 1.8" />
+          <path d="M7 3.8v12.4a2.8 2.8 0 0 0 2.8 2.8h10.4" />
+          <path d="M3.8 7h12.4A2.8 2.8 0 0 1 19 9.8v10.4" />
+          <path d="M9.4 9.4h5.2v5.2H9.4z" />
+          <path d="M4.8 4.8h2.2M17 19.2h2.2" />
         </>
       )
     case 'navSettings':
       return (
         <>
-          <circle cx="12" cy="12" r="7.2" />
-          <path d="M12 5.6v3" />
-          <path d="M12 15.4v3" />
-          <path d="M5.6 12h3" />
-          <path d="M15.4 12h3" />
-          <circle cx="12" cy="12" r="1.8" />
+          <path d="m12 3.8 6.5 3.8v8.8L12 20.2l-6.5-3.8V7.6L12 3.8Z" />
+          <path d="m12 8.3 3.3 3.7-3.3 3.7-3.3-3.7L12 8.3Z" />
+          <path d="M12 3.8v2.5M18.5 7.6l-2.2 1.3M18.5 16.4l-2.2-1.3M12 20.2v-2.5M5.5 16.4l2.2-1.3M5.5 7.6l2.2 1.3" />
         </>
       )
     case 'navUpscale':
       return (
         <>
-          <path d="M12 3.9 20.1 12 12 20.1 3.9 12 12 3.9Z" />
-          <path d="M12 8.1 15.9 12 12 15.9 8.1 12 12 8.1Z" />
+          <path d="m12 3.5 7.8 4.5v8L12 20.5 4.2 16V8L12 3.5Z" />
+          <path d="m12 7.2 4.5 2.6v4.4L12 16.8l-4.5-2.6V9.8L12 7.2Z" />
+          <path d="m12 10.2 1.8 1.8-1.8 1.8-1.8-1.8 1.8-1.8Z" />
+          <path d="M4.2 8 2.8 9.4M19.8 8l1.4 1.4M4.2 16l-1.4-1.4M19.8 16l1.4-1.4" />
         </>
       )
     case 'navWorkspace':
       return (
         <>
-          <path d="M12 3.6 20.4 12 12 20.4 3.6 12 12 3.6Z" />
-          <circle cx="12" cy="12" r=".8" fill="currentColor" stroke="none" />
+          <path d="M6.2 4.4h11.6l1.8 1.8v11.6l-1.8 1.8H6.2l-1.8-1.8V6.2l1.8-1.8Z" />
+          <path d="M8.1 8.1h2.3M13.6 8.1h2.3M8.1 15.9h2.3M13.6 15.9h2.3" />
+          <path d="m12 9.2.9 1.9 1.9.9-1.9.9-.9 1.9-.9-1.9-1.9-.9 1.9-.9.9-1.9Z" />
         </>
       )
     case 'palette':
@@ -230,18 +232,25 @@ function renderIconPath(name: IconName) {
     case 'themeDark':
       return (
         <>
-          <path d="M18.8 14.1A6.8 6.8 0 0 1 9.9 5.2 7.4 7.4 0 1 0 18.8 14.1Z" />
-          <circle cx="16.8" cy="7.4" r=".85" fill="currentColor" stroke="none" />
+          <path d="M18.9 15.1A7.3 7.3 0 0 1 9.2 5.3 7.7 7.7 0 1 0 18.9 15.1Z" />
+          <path d="m15.8 4.5.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6.6-1.7Z" />
         </>
       )
     case 'themeLight':
       return (
         <>
-          <circle cx="12" cy="12" r="5.4" />
-          <path d="M12 3.8v2" />
-          <path d="M12 18.2v2" />
-          <path d="M3.8 12h2" />
-          <path d="M18.2 12h2" />
+          <path d="m12 6.7 5.3 5.3-5.3 5.3L6.7 12 12 6.7Z" />
+          <path d="M12 3.5v2.1M12 18.4v2.1M3.5 12h2.1M18.4 12h2.1" />
+          <path d="m6 6 1.5 1.5m9 9L18 18m0-12-1.5 1.5M7.5 16.5 6 18" />
+        </>
+      )
+    case 'themeSystem':
+      return (
+        <>
+          <circle cx="12" cy="12" r="7.7" />
+          <path d="M12 4.3v15.4" />
+          <path d="m8.7 8.7 3.3 3.3-3.3 3.3" />
+          <path d="m15.3 8.7-3.3 3.3 3.3 3.3" />
         </>
       )
     case 'upscale':

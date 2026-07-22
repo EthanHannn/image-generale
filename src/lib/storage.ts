@@ -34,7 +34,7 @@ export type ProviderConfig = {
   apiKey: string
 }
 
-export type ThemeName = 'dark' | 'light'
+export type ThemeName = 'dark' | 'light' | 'system'
 
 export type RequestParams = {
   n: number
@@ -460,7 +460,7 @@ export function saveConfig(config: DbConfig) {
 
 function loadThemeFromLocalStorage(): ThemeName | null {
   const saved = localStorage.getItem(THEME_KEY)
-  return saved === 'light' || saved === 'dark' ? saved : null
+  return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : null
 }
 
 function normalizeSnapshot(raw: Partial<AppConfigSnapshot> & { apiUrl?: string; apiKey?: string } = {}): AppConfigSnapshot {
@@ -503,7 +503,7 @@ function normalizeSnapshot(raw: Partial<AppConfigSnapshot> & { apiUrl?: string; 
     currentUpscaleProviderId: upscaleStore.currentProviderId,
     historyRootDir: raw.historyRootDir || '',
     historyStoragePolicy: normalizeHistoryStoragePolicy(raw.historyStoragePolicy),
-    theme: raw.theme === 'light' || raw.theme === 'dark'
+    theme: raw.theme === 'light' || raw.theme === 'dark' || raw.theme === 'system'
       ? raw.theme
       : (loadThemeFromLocalStorage() || 'dark'),
   }
