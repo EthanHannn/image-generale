@@ -35,6 +35,7 @@ import {
   type HistoryStoragePolicy,
   type HistoryOverview,
   type HistoryRecord,
+  type HistoryReferenceImages,
   type ProviderConfig,
   type RequestParams,
   type ThemeName,
@@ -1691,9 +1692,17 @@ export default function App() {
       setResultUpscaleVariants({})
       setGenStatus({ type: 'ok', message: `成功生成 ${nextResults.length} 张，用时 ${duration}s` })
       showToast(`生成成功：${nextResults.length} 张图片`, 'success')
+      const historyReferenceImages: HistoryReferenceImages = {}
+      if (mode === 'edit') {
+        if (styleReferenceFile && useRefFiles.includes(styleReferenceFile))
+          historyReferenceImages.style = styleReferenceFile
+        if (characterReferenceFile && useRefFiles.includes(characterReferenceFile))
+          historyReferenceImages.character = characterReferenceFile
+      }
+
       let recordId: number | null = null
       try {
-        recordId = await saveHistory(nextResults, duration, nextRequestJson, currentSizePlan, requestPrompt)
+        recordId = await saveHistory(nextResults, duration, nextRequestJson, currentSizePlan, requestPrompt, historyReferenceImages)
       }
       catch (error) {
         showToast(`历史记录保存失败: ${getErrorMessage(error)}`, 'error')
@@ -1728,7 +1737,14 @@ export default function App() {
     }
   }
 
-  async function saveHistory(nextResults: ResultImage[], duration: string, nextRequestJson: string, plan: SizePlan, requestPrompt: string) {
+  async function saveHistory(
+    nextResults: ResultImage[],
+    duration: string,
+    nextRequestJson: string,
+    plan: SizePlan,
+    requestPrompt: string,
+    referenceImages: HistoryReferenceImages,
+  ) {
     if (!currentProvider || !currentModel || !nextResults.length)
       return null
 
@@ -1776,10 +1792,11 @@ export default function App() {
       params: nextParams,
       images: imageBlobs,
       thumbnails,
+      referenceImages,
       imageCount: imageBlobs.length,
       duration,
       requestJson: nextRequestJson,
-      totalSize: totalSize + getBlobTotalSize(thumbnails) + JSON.stringify(nextParams).length + requestPrompt.length,
+      totalSize: totalSize + getBlobTotalSize(thumbnails) + getBlobTotalSize(Object.values(referenceImages)) + JSON.stringify(nextParams).length + requestPrompt.length,
       isFavorite: false,
       favoritedAt: null,
     }
@@ -2419,6 +2436,22 @@ export default function App() {
     setRequestJson(record.requestJson || '无')
     setUpscaleResponseJson('无')
 
+    if (record.mode === 'edit') {
+      const getReferenceFile = (role: 'style' | 'character') => {
+        const blob = record.referenceImages?.[role]
+        if (!blob)
+          return null
+        const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type === 'image/webp' ? 'webp' : 'png'
+        return new File([blob], `history-${role}-reference.${extension}`, { type: blob.type || 'image/png' })
+      }
+      setStyleReferenceFile(getReferenceFile('style'))
+      setCharacterReferenceFile(getReferenceFile('character'))
+    }
+    else {
+      setStyleReferenceFile(null)
+      setCharacterReferenceFile(null)
+    }
+
     if (models.some(model => model.id === record.modelId))
       setCurrentModelId(record.modelId)
 
@@ -2445,8 +2478,6 @@ export default function App() {
     setResults(restored)
     setView('workspace')
     showToast('已恢复历史记录', 'success')
-    if (record.mode === 'edit')
-      window.setTimeout(() => showToast('图生图参考图未保存，请重新上传', 'error'), 1200)
   }
 
   async function toggleHistoryFavorite(recordId: number, nextFavorite: boolean) {

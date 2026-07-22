@@ -83,9 +83,12 @@ export type HistoryRecord = {
   totalSize: number
   thumbnails?: Blob[]
   upscaledImages?: Record<number, Record<number, Blob>>
+  referenceImages?: Partial<Record<'style' | 'character', Blob>>
   isFavorite?: boolean
   favoritedAt?: number | null
 }
+
+export type HistoryReferenceImages = Partial<Record<'style' | 'character', Blob>>
 
 export type HistoryRecordModeFilter = 'all' | 'gen' | 'edit' | 'upscale'
 
@@ -111,10 +114,16 @@ export type HistoryOverview = {
   latestRecord: HistoryRecord | null
 }
 
-type DesktopHistoryRecord = Omit<HistoryRecord, 'images' | 'thumbnails'> & {
+type DesktopReferenceImage = {
+  data: string
+  mimeType: string
+}
+
+type DesktopHistoryRecord = Omit<HistoryRecord, 'images' | 'thumbnails' | 'upscaledImages' | 'referenceImages'> & {
   imagesBase64: string[]
   thumbnailBase64?: string[]
   upscaleImagesBase64?: Record<string, Record<string, string>>
+  referenceImagesBase64?: Partial<Record<'style' | 'character', DesktopReferenceImage>>
 }
 
 type DesktopHistoryPageResult = {
@@ -324,20 +333,30 @@ async function invokeDesktop<T>(command: string, args?: Record<string, unknown>)
 }
 
 async function serializeHistoryRecord(record: HistoryRecord): Promise<DesktopHistoryRecord> {
+  const { images, thumbnails, upscaledImages, referenceImages, ...metadata } = record
   const upscaleImagesBase64: Record<string, Record<string, string>> = {}
-  for (const [imageIndex, variants] of Object.entries(record.upscaledImages || {})) {
+  for (const [imageIndex, variants] of Object.entries(upscaledImages || {})) {
     upscaleImagesBase64[imageIndex] = {}
     for (const [factor, blob] of Object.entries(variants))
       upscaleImagesBase64[imageIndex][factor] = await blobToBase64(blob)
   }
 
+  const referenceImagesBase64: Partial<Record<'style' | 'character', DesktopReferenceImage>> = {}
+  for (const [role, blob] of Object.entries(referenceImages || {}) as Array<['style' | 'character', Blob]>) {
+    referenceImagesBase64[role] = {
+      data: await blobToBase64(blob),
+      mimeType: blob.type || 'image/png',
+    }
+  }
+
   return {
-    ...record,
-    imagesBase64: await Promise.all((record.images || []).map(blob => blobToBase64(blob))),
-    thumbnailBase64: record.thumbnails?.length
-      ? await Promise.all(record.thumbnails.map(blob => blobToBase64(blob)))
+    ...metadata,
+    imagesBase64: await Promise.all((images || []).map(blob => blobToBase64(blob))),
+    thumbnailBase64: thumbnails?.length
+      ? await Promise.all(thumbnails.map(blob => blobToBase64(blob)))
       : [],
     upscaleImagesBase64,
+    referenceImagesBase64,
   }
 }
 
@@ -349,11 +368,16 @@ function deserializeHistoryRecord(record: DesktopHistoryRecord): HistoryRecord {
       upscaledImages[Number(imageIndex)][Number(factor)] = base64ToBlob(base64)
   }
 
+  const referenceImages: Partial<Record<'style' | 'character', Blob>> = {}
+  for (const [role, image] of Object.entries(record.referenceImagesBase64 || {}) as Array<['style' | 'character', DesktopReferenceImage]>)
+    referenceImages[role] = new Blob([base64ToBlob(image.data)], { type: image.mimeType || 'image/png' })
+
   return {
     ...record,
     images: (record.imagesBase64 || []).map(base64 => base64ToBlob(base64)),
     thumbnails: (record.thumbnailBase64 || []).map(base64 => base64ToBlob(base64)),
     upscaledImages,
+    referenceImages,
     isFavorite: !!record.isFavorite,
     favoritedAt: record.favoritedAt || null,
   }

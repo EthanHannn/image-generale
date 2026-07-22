@@ -4,7 +4,7 @@ use hmac::{Hmac, Mac};
 use rfd::FileDialog;
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use sha1::Sha1;
+use sha1::{Digest, Sha1};
 use std::{
     collections::BTreeMap,
     fs,
@@ -217,9 +217,25 @@ struct HistoryRecordPayload {
     #[serde(default)]
     upscale_images_base64: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default)]
+    reference_images_base64: BTreeMap<String, HistoryReferenceImagePayload>,
+    #[serde(default)]
     is_favorite: bool,
     #[serde(default)]
     favorited_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryReferenceImagePayload {
+    data: String,
+    mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredHistoryReferenceImage {
+    path: String,
+    mime_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -371,6 +387,10 @@ fn open_history_db(app: &AppHandle) -> Result<Connection, String> {
         &connection,
         "ALTER TABLE history_records ADD COLUMN favorited_at INTEGER",
     )?;
+    add_history_column(
+        &connection,
+        "ALTER TABLE history_records ADD COLUMN reference_images_json TEXT NOT NULL DEFAULT '{}'",
+    )?;
     connection
         .execute(
             "CREATE INDEX IF NOT EXISTS idx_history_favorite ON history_records(is_favorite, favorited_at)",
@@ -458,6 +478,44 @@ fn save_history_thumbnail_files(
     }
 
     Ok(relative_paths)
+}
+
+fn save_history_reference_images(
+    app: &AppHandle,
+    images_base64: &BTreeMap<String, HistoryReferenceImagePayload>,
+) -> Result<BTreeMap<String, StoredHistoryReferenceImage>, String> {
+    if images_base64.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let reference_dir = history_root_dir(app)?.join("references");
+    fs::create_dir_all(&reference_dir).map_err(|error| error.to_string())?;
+    let mut stored_images = BTreeMap::new();
+
+    for (role, image) in images_base64 {
+        let bytes = STANDARD
+            .decode(&image.data)
+            .map_err(|error| error.to_string())?;
+        let hash = format!("{:x}", Sha1::digest(&bytes));
+        let relative_path = format!("references/{}", hash);
+        let absolute_path = reference_dir.join(&hash);
+        if !absolute_path.exists() {
+            fs::write(&absolute_path, bytes).map_err(|error| error.to_string())?;
+        }
+        stored_images.insert(
+            role.clone(),
+            StoredHistoryReferenceImage {
+                path: relative_path,
+                mime_type: if image.mime_type.trim().is_empty() {
+                    "image/png".to_string()
+                } else {
+                    image.mime_type.clone()
+                },
+            },
+        );
+    }
+
+    Ok(stored_images)
 }
 
 fn delete_history_images(app: &AppHandle, images_json: &str) -> Result<(), String> {
@@ -554,6 +612,76 @@ fn read_upscale_images(
     Ok(images_base64)
 }
 
+fn read_history_reference_images(
+    app: &AppHandle,
+    references_json: &str,
+) -> Result<BTreeMap<String, HistoryReferenceImagePayload>, String> {
+    let references: BTreeMap<String, StoredHistoryReferenceImage> =
+        serde_json::from_str(references_json).unwrap_or_default();
+    let root_dir = history_root_dir(app)?;
+    let mut images = BTreeMap::new();
+
+    for (role, reference) in references {
+        let Some(relative_path) = normalize_relative_path(&reference.path) else {
+            continue;
+        };
+        let absolute_path = root_dir.join(relative_path);
+        if !absolute_path.exists() {
+            continue;
+        }
+        let bytes = fs::read(&absolute_path).map_err(|error| error.to_string())?;
+        images.insert(
+            role,
+            HistoryReferenceImagePayload {
+                data: STANDARD.encode(bytes),
+                mime_type: reference.mime_type,
+            },
+        );
+    }
+
+    Ok(images)
+}
+
+fn delete_unreferenced_history_reference_images(
+    app: &AppHandle,
+    connection: &Connection,
+    references_json: &str,
+) -> Result<(), String> {
+    let deleted_references: BTreeMap<String, StoredHistoryReferenceImage> =
+        serde_json::from_str(references_json).unwrap_or_default();
+    if deleted_references.is_empty() {
+        return Ok(());
+    }
+
+    let mut statement = connection
+        .prepare("SELECT reference_images_json FROM history_records")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let mut remaining_paths = Vec::new();
+    for row in rows {
+        let references: BTreeMap<String, StoredHistoryReferenceImage> =
+            serde_json::from_str(&row.map_err(|error| error.to_string())?).unwrap_or_default();
+        remaining_paths.extend(references.into_values().map(|reference| reference.path));
+    }
+
+    let root_dir = history_root_dir(app)?;
+    for reference in deleted_references.into_values() {
+        if remaining_paths.iter().any(|path| path == &reference.path) {
+            continue;
+        }
+        if let Some(relative_path) = normalize_relative_path(&reference.path) {
+            let absolute_path = root_dir.join(relative_path);
+            if absolute_path.exists() {
+                fs::remove_file(absolute_path).map_err(|error| error.to_string())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn row_to_history_payload(
     app: &AppHandle,
     row: &rusqlite::Row<'_>,
@@ -567,6 +695,9 @@ fn row_to_history_payload(
     let upscale_images_json: String = row
         .get("upscale_images_json")
         .map_err(|error| error.to_string())?;
+    let reference_images_json: String = row
+        .get("reference_images_json")
+        .map_err(|error| error.to_string())?;
     let params =
         serde_json::from_str::<RequestParams>(&params_json).map_err(|error| error.to_string())?;
     let images_base64 = if include_images {
@@ -577,6 +708,11 @@ fn row_to_history_payload(
     let thumbnail_base64 = read_history_thumbnails(app, &thumbnails_json)?;
     let upscale_images_base64 = if include_images {
         read_upscale_images(app, &upscale_images_json)?
+    } else {
+        BTreeMap::new()
+    };
+    let reference_images_base64 = if include_images {
+        read_history_reference_images(app, &reference_images_json)?
     } else {
         BTreeMap::new()
     };
@@ -602,6 +738,7 @@ fn row_to_history_payload(
         request_json: row.get("request_json").map_err(|error| error.to_string())?,
         total_size: row.get("total_size").map_err(|error| error.to_string())?,
         upscale_images_base64,
+        reference_images_base64,
         is_favorite: is_favorite != 0,
         favorited_at: row.get("favorited_at").map_err(|error| error.to_string())?,
     })
@@ -840,6 +977,7 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
     let image_paths = save_history_images(&app, record.timestamp, &record.images_base64)?;
     let thumbnail_paths =
         save_history_thumbnail_files(&app, record.timestamp, &record.thumbnail_base64)?;
+    let reference_images = save_history_reference_images(&app, &record.reference_images_base64)?;
     let params_json = serde_json::to_string(&record.params).map_err(|error| error.to_string())?;
     let images_json = serde_json::to_string(&image_paths).map_err(|error| error.to_string())?;
     let thumbnails_json =
@@ -847,6 +985,8 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
     let upscale_images_json =
         serde_json::to_string(&BTreeMap::<String, BTreeMap<String, String>>::new())
             .map_err(|error| error.to_string())?;
+    let reference_images_json =
+        serde_json::to_string(&reference_images).map_err(|error| error.to_string())?;
 
     connection
         .execute(
@@ -854,8 +994,8 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
       INSERT INTO history_records (
         timestamp, provider_id, provider_name, mode, model_id, model_name,
         prompt, params_json, images_json, image_count, duration, request_json, total_size,
-        upscale_images_json, thumbnails_json, is_favorite, favorited_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        upscale_images_json, thumbnails_json, reference_images_json, is_favorite, favorited_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ",
             params![
                 record.timestamp,
@@ -873,6 +1013,7 @@ fn add_history_record(app: AppHandle, record: HistoryRecordPayload) -> Result<i6
                 record.total_size,
                 upscale_images_json,
                 thumbnails_json,
+                reference_images_json,
                 if record.is_favorite { 1 } else { 0 },
                 record.favorited_at,
             ],
@@ -1163,7 +1304,7 @@ fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
     let connection = open_history_db(&app)?;
     let mut statement = connection
         .prepare(
-            "SELECT images_json, upscale_images_json, thumbnails_json FROM history_records WHERE id = ? LIMIT 1",
+            "SELECT images_json, upscale_images_json, thumbnails_json, reference_images_json FROM history_records WHERE id = ? LIMIT 1",
         )
         .map_err(|error| error.to_string())?;
     let paths_json = statement
@@ -1172,6 +1313,7 @@ fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })
         .optional()
@@ -1181,13 +1323,16 @@ fn delete_history_record(app: AppHandle, id: i64) -> Result<(), String> {
         .execute("DELETE FROM history_records WHERE id = ?", params![id])
         .map_err(|error| error.to_string())?;
 
-    if let Some((images_json, upscale_images_json, thumbnails_json)) = paths_json {
+    if let Some((images_json, upscale_images_json, thumbnails_json, reference_images_json)) =
+        paths_json
+    {
         delete_history_images(&app, &images_json)?;
         delete_relative_paths(&app, upscale_paths_from_json(&upscale_images_json))?;
         delete_relative_paths(
             &app,
             serde_json::from_str(&thumbnails_json).unwrap_or_default(),
         )?;
+        delete_unreferenced_history_reference_images(&app, &connection, &reference_images_json)?;
     }
 
     Ok(())
@@ -1203,6 +1348,10 @@ fn clear_history_records(app: AppHandle) -> Result<(), String> {
     let thumbnails_dir = history_root_dir(&app)?.join("thumbnails");
     if thumbnails_dir.exists() {
         fs::remove_dir_all(&thumbnails_dir).map_err(|error| error.to_string())?;
+    }
+    let references_dir = history_root_dir(&app)?.join("references");
+    if references_dir.exists() {
+        fs::remove_dir_all(&references_dir).map_err(|error| error.to_string())?;
     }
 
     connection
