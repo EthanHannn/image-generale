@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { Icon, type IconName } from './components/Icon'
 import { Button } from './components/ui/Button'
+import { ContextMenu } from './components/ui/ContextMenu'
 import { Dialog } from './components/ui/Dialog'
 import { Input } from './components/ui/Input'
 import { Select } from './components/ui/Select'
@@ -3766,33 +3767,16 @@ export default function App() {
         : null}
 
       {imageContextMenu
-        ? (
-            <div
-              className="image-context-menu-backdrop"
-              onClick={closeImageContextMenu}
-              onContextMenu={(event) => {
-                event.preventDefault()
-                closeImageContextMenu()
-              }}
-            >
-              <div
-                className="image-context-menu"
-                style={{ left: imageContextMenu.x, top: imageContextMenu.y }}
-                onClick={event => event.stopPropagation()}
-                onContextMenu={event => event.preventDefault()}
-              >
-                <button type="button" onClick={handleContextMenuSave}>
-                  <span>图片另存为</span>
-                </button>
-                <button type="button" onClick={handleContextMenuCopy}>
-                  <span>复制 Base64</span>
-                </button>
-                <button type="button" onClick={() => void handleContextMenuSendToCropMargin()}>
-                  <span>发送到裁剪台</span>
-                </button>
-              </div>
-            </div>
-          )
+        ? <ContextMenu
+            x={imageContextMenu.x}
+            y={imageContextMenu.y}
+            onClose={closeImageContextMenu}
+            items={[
+              { id: 'save', label: '图片另存为', onSelect: handleContextMenuSave },
+              { id: 'copy', label: '复制 Base64', onSelect: handleContextMenuCopy },
+              { id: 'send-to-crop-margin', label: '发送到裁剪台', onSelect: () => void handleContextMenuSendToCropMargin() },
+            ]}
+          />
         : null}
 
       <div className={`img-modal ${previewImage ? 'active' : ''}`} onClick={closeImagePreview}>

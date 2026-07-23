@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { ContextMenu } from '../../components/ui/ContextMenu'
 import type { MouseEvent } from 'react'
 import { saveImageFile } from '../../lib/files'
 import { getErrorMessage } from '../../lib/errors'
@@ -397,31 +398,17 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
         : null}
       {contextMenu
         ? createPortal(
-            <div
-              className={`image-context-menu-backdrop ${hasPreview ? 'history-context-menu-backdrop' : ''}`}
-              onClick={closeContextMenu}
-              onContextMenu={(event) => {
-                event.preventDefault()
-                closeContextMenu()
-              }}
-            >
-              <div
-                className="image-context-menu"
-                style={{ left: contextMenu.x, top: contextMenu.y }}
-                onClick={event => event.stopPropagation()}
-                onContextMenu={event => event.preventDefault()}
-              >
-                <button type="button" onClick={() => void saveContextImage()}>
-                  <span>图片另存为</span>
-                </button>
-                <button type="button" onClick={() => void copyContextImage()}>
-                  <span>复制 Base64</span>
-                </button>
-                <button type="button" onClick={() => void sendContextImageToCropMargin()}>
-                  <span>发送到裁剪台</span>
-                </button>
-              </div>
-            </div>,
+            <ContextMenu
+              backdropClassName={hasPreview ? 'history-context-menu-backdrop' : undefined}
+              x={contextMenu.x}
+              y={contextMenu.y}
+              onClose={closeContextMenu}
+              items={[
+                { id: 'save', label: '图片另存为', onSelect: () => void saveContextImage() },
+                { id: 'copy', label: '复制 Base64', onSelect: () => void copyContextImage() },
+                { id: 'send-to-crop-margin', label: '发送到裁剪台', onSelect: () => void sendContextImageToCropMargin() },
+              ]}
+            />,
             document.body,
           )
         : null}
