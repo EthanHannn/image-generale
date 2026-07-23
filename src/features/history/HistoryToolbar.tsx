@@ -1,3 +1,9 @@
+import { Button } from '../../components/ui/Button'
+import { Field } from '../../components/ui/Field'
+import { Input } from '../../components/ui/Input'
+import { SegmentedControl } from '../../components/ui/SegmentedControl'
+import { Select } from '../../components/ui/Select'
+
 type HistoryToolbarProps = {
   historySearch: string
   historyModelFilter: string
@@ -40,49 +46,39 @@ export function HistoryToolbar(props: HistoryToolbarProps) {
         </div>
         <div className="history-toolbar-actions">
           <span>{storageSummary}</span>
-          <button className="dl-btn history-clear-btn" type="button" onClick={() => void onClearHistory()}>清理未收藏</button>
+          <Button className="history-clear-btn" variant="secondary" onClick={() => void onClearHistory()}>清理未收藏</Button>
         </div>
       </div>
       <div className="history-toolbar">
-        <div className="history-filter-field">
-          <span>收藏筛选</span>
-          <div className="history-favorite-segment" role="group" aria-label="收藏筛选">
-            <button
-              className={historyFavoriteFilter === 'all' ? 'active' : ''}
-              type="button"
-              onClick={() => onHistoryFavoriteFilterChange('all')}
-            >
-              全部 {totalCount}
-            </button>
-            <button
-              className={historyFavoriteFilter === 'favorites' ? 'active' : ''}
-              type="button"
-              onClick={() => onHistoryFavoriteFilterChange('favorites')}
-            >
-              收藏 {favoriteCount}
-            </button>
-          </div>
-        </div>
-        <label className="history-filter-field">
-          <span>Prompt 搜索</span>
-          <input value={historySearch} placeholder="按关键词检索历史描述..." onChange={event => onHistorySearchChange(event.target.value)} />
-        </label>
-        <label className="history-filter-field history-filter-compact">
-          <span>类别筛选</span>
-          <select value={historyModeFilter} onChange={event => onHistoryModeFilterChange(event.target.value as 'all' | 'gen' | 'edit' | 'upscale')}>
+        <Field className="history-filter-field" label="收藏筛选">
+          <SegmentedControl
+            ariaLabel="收藏筛选"
+            className="history-favorite-segment"
+            value={historyFavoriteFilter}
+            options={[
+              { value: 'all', label: `全部 ${totalCount}` },
+              { value: 'favorites', label: `收藏 ${favoriteCount}` },
+            ]}
+            onValueChange={onHistoryFavoriteFilterChange}
+          />
+        </Field>
+        <Field className="history-filter-field" htmlFor="history-search" label="Prompt 搜索">
+          <Input id="history-search" value={historySearch} placeholder="按关键词检索历史描述..." onChange={event => onHistorySearchChange(event.target.value)} />
+        </Field>
+        <Field className="history-filter-field history-filter-compact" htmlFor="history-mode-filter" label="类别筛选">
+          <Select id="history-mode-filter" value={historyModeFilter} onChange={event => onHistoryModeFilterChange(event.target.value as 'all' | 'gen' | 'edit' | 'upscale')}>
             <option value="all">全部类别</option>
             <option value="gen">文生图</option>
             <option value="edit">图生图</option>
             <option value="upscale">单独超分</option>
-          </select>
-        </label>
-        <label className="history-filter-field history-filter-compact">
-          <span>模型筛选</span>
-          <select value={historyModelFilter} onChange={event => onHistoryModelFilterChange(event.target.value)}>
+          </Select>
+        </Field>
+        <Field className="history-filter-field history-filter-compact" htmlFor="history-model-filter" label="模型筛选">
+          <Select id="history-model-filter" value={historyModelFilter} onChange={event => onHistoryModelFilterChange(event.target.value)}>
             <option value="">全部模型</option>
             {modelFilterOptions.map(modelId => <option key={modelId} value={modelId}>{modelId}</option>)}
-          </select>
-        </label>
+          </Select>
+        </Field>
       </div>
     </div>
   )

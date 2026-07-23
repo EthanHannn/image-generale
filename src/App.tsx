@@ -2,6 +2,9 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { Icon, type IconName } from './components/Icon'
+import { Button } from './components/ui/Button'
+import { Input } from './components/ui/Input'
+import { Select } from './components/ui/Select'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
 import { mergeCropMarginSources, normalizeCropMarginIncomingSource } from './features/crop-margin/cropMarginQueue'
 import type { CropMarginIncomingImage, CropMarginSource, CropMarginVariant } from './features/crop-margin/types'
@@ -3545,12 +3548,12 @@ export default function App() {
                 <div className="storage-setting-desc">桌面端会把历史数据库和图片资源保存到这里。</div>
               </div>
               <div className="storage-setting-actions">
-                <button className="secondary" type="button" disabled={historyDirPending} onClick={() => void handleOpenHistoryDirectory()}>
+                <Button variant="secondary" disabled={historyDirPending} onClick={() => void handleOpenHistoryDirectory()}>
                   打开目录
-                </button>
-                <button type="button" disabled={historyDirPending} onClick={() => void handleSelectHistoryDirectory()}>
+                </Button>
+                <Button disabled={historyDirPending} onClick={() => void handleSelectHistoryDirectory()}>
                   {historyDirPending ? '选择中…' : '更改目录'}
-                </button>
+                </Button>
               </div>
             </div>
             <div className="storage-setting-path">{historyRootDir || '未设置时将使用应用默认目录'}</div>
@@ -3561,7 +3564,7 @@ export default function App() {
             </div>
             <div className="storage-limit-box">
               <label className="storage-limit-toggle">
-                <input
+                <Input
                   type="checkbox"
                   checked={storageLimitEnabled}
                   disabled={storagePolicyPending}
@@ -3578,21 +3581,20 @@ export default function App() {
                   disabled={!storageLimitEnabled || storagePolicyPending}
                   onChange={event => setStorageLimitDraft(event.target.value)}
                 />
-                <select
+                <Select
                   value={storageLimitUnit}
                   disabled={!storageLimitEnabled || storagePolicyPending}
                   onChange={event => setStorageLimitUnit(event.target.value as StorageLimitUnit)}
                 >
                   <option value="GB">GB</option>
                   <option value="MB">MB</option>
-                </select>
-                <button
-                  type="button"
+                </Select>
+                <Button
                   disabled={storagePolicyPending || (storageLimitEnabled && !storageLimitBytes)}
                   onClick={() => void saveHistoryStoragePolicy()}
                 >
                   {storagePolicyPending ? '保存中...' : '保存设置'}
-                </button>
+                </Button>
               </div>
               <div className="storage-limit-hint">
                 {storageLimitEnabled
