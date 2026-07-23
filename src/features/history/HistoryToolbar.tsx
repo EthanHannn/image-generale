@@ -44,21 +44,24 @@ export function HistoryToolbar(props: HistoryToolbarProps) {
         </div>
       </div>
       <div className="history-toolbar">
-        <div className="history-favorite-segment" role="group" aria-label="收藏筛选">
-          <button
-            className={historyFavoriteFilter === 'all' ? 'active' : ''}
-            type="button"
-            onClick={() => onHistoryFavoriteFilterChange('all')}
-          >
-            全部 {totalCount}
-          </button>
-          <button
-            className={historyFavoriteFilter === 'favorites' ? 'active' : ''}
-            type="button"
-            onClick={() => onHistoryFavoriteFilterChange('favorites')}
-          >
-            收藏 {favoriteCount}
-          </button>
+        <div className="history-filter-field">
+          <span>收藏筛选</span>
+          <div className="history-favorite-segment" role="group" aria-label="收藏筛选">
+            <button
+              className={historyFavoriteFilter === 'all' ? 'active' : ''}
+              type="button"
+              onClick={() => onHistoryFavoriteFilterChange('all')}
+            >
+              全部 {totalCount}
+            </button>
+            <button
+              className={historyFavoriteFilter === 'favorites' ? 'active' : ''}
+              type="button"
+              onClick={() => onHistoryFavoriteFilterChange('favorites')}
+            >
+              收藏 {favoriteCount}
+            </button>
+          </div>
         </div>
         <label className="history-filter-field">
           <span>Prompt 搜索</span>
