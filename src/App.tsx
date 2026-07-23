@@ -9,6 +9,7 @@ import { EmptyState } from './components/ui/EmptyState'
 import { Input } from './components/ui/Input'
 import { SectionHeader } from './components/ui/SectionHeader'
 import { Select } from './components/ui/Select'
+import { StatusMessage, type StatusMessageType } from './components/ui/StatusMessage'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
 import { mergeCropMarginSources, normalizeCropMarginIncomingSource } from './features/crop-margin/cropMarginQueue'
 import type { CropMarginIncomingImage, CropMarginSource, CropMarginVariant } from './features/crop-margin/types'
@@ -54,7 +55,7 @@ import { getErrorMessage } from './lib/errors'
 import { saveImageFile } from './lib/files'
 import { base64ToBlob, blobToBase64, detectImageMimeType, formatSize, sanitizeFilename } from './lib/utils'
 
-type StatusType = 'ok' | 'err' | 'loading' | 'warn'
+type StatusType = StatusMessageType
 type StatusValue = { type: StatusType; message: string } | null
 type ToastValue = { type: 'success' | 'error'; message: string } | null
 type ResultImage = { b64_json?: string; url?: string }
@@ -2579,12 +2580,7 @@ export default function App() {
   function renderStatus(status: StatusValue) {
     if (!status)
       return null
-    return (
-      <div className={`status ${status.type}`}>
-        {status.type === 'loading' ? <span className="spinner" /> : null}
-        <span>{status.message}</span>
-      </div>
-    )
+    return <StatusMessage message={status.message} type={status.type} />
   }
 
   const navItems: Array<{ id: ViewName; label: string; icon: IconName; hint: string }> = [
