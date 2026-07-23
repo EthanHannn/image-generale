@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { ChangeEvent, DragEvent, MouseEvent, PointerEvent, SyntheticEvent, WheelEvent } from 'react'
 import { Icon, type IconName } from './components/Icon'
 import { Button } from './components/ui/Button'
+import { Dialog } from './components/ui/Dialog'
 import { Input } from './components/ui/Input'
 import { Select } from './components/ui/Select'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
@@ -504,17 +505,8 @@ export default function App() {
           return
         }
 
-        if (providerModalOpen) {
-          event.preventDefault()
-          closeProviderModal()
+        if (providerModalOpen || upscaleModalOpen)
           return
-        }
-
-        if (upscaleModalOpen) {
-          event.preventDefault()
-          closeUpscaleModal()
-          return
-        }
 
         if (isGenerating) {
           event.preventDefault()
@@ -3965,11 +3957,15 @@ export default function App() {
           : null}
       </div>
 
-      {providerModalOpen && (
-        <div className="provider-modal-overlay" onClick={closeProviderModal}>
-          <div className="provider-modal-dialog" onClick={event => event.stopPropagation()}>
+      <Dialog
+        ariaLabelledBy="provider-modal-title"
+        contentClassName="provider-modal-dialog"
+        open={providerModalOpen}
+        overlayClassName="provider-modal-overlay"
+        onClose={closeProviderModal}
+      >
             <div className="provider-modal-header">
-              <h3>{providerModalMode === 'create' ? '新增供应商' : '编辑供应商'}</h3>
+              <h3 id="provider-modal-title">{providerModalMode === 'create' ? '新增供应商' : '编辑供应商'}</h3>
               <button className="provider-modal-close" type="button" onClick={closeProviderModal} aria-label="关闭弹窗">
                 <Icon name="close" size={16} />
               </button>
@@ -4057,15 +4053,17 @@ export default function App() {
               <button className="secondary" type="button" onClick={closeProviderModal}>取消</button>
               <button type="button" onClick={handleSaveProviderModal}>保存</button>
             </div>
-          </div>
-        </div>
-      )}
+      </Dialog>
 
-      {upscaleModalOpen && (
-        <div className="provider-modal-overlay" onClick={closeUpscaleModal}>
-          <div className="provider-modal-dialog" onClick={event => event.stopPropagation()}>
+      <Dialog
+        ariaLabelledBy="upscale-provider-modal-title"
+        contentClassName="provider-modal-dialog"
+        open={upscaleModalOpen}
+        overlayClassName="provider-modal-overlay"
+        onClose={closeUpscaleModal}
+      >
             <div className="provider-modal-header">
-              <h3>{upscaleModalMode === 'create' ? '新增超分服务' : '编辑超分服务'}</h3>
+              <h3 id="upscale-provider-modal-title">{upscaleModalMode === 'create' ? '新增超分服务' : '编辑超分服务'}</h3>
               <button className="provider-modal-close" type="button" onClick={closeUpscaleModal} aria-label="关闭弹窗">
                 <Icon name="close" size={16} />
               </button>
@@ -4190,9 +4188,7 @@ export default function App() {
               <button className="secondary" type="button" onClick={closeUpscaleModal}>取消</button>
               <button type="button" onClick={handleSaveUpscaleProviderModal}>保存</button>
             </div>
-          </div>
-        </div>
-      )}
+      </Dialog>
 
       <div className={`toast ${toast ? `show ${toast.type}` : ''}`}>{toast?.message}</div>
     </>
