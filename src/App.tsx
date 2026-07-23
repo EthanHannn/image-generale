@@ -5,6 +5,7 @@ import { Icon, type IconName } from './components/Icon'
 import { Button } from './components/ui/Button'
 import { ContextMenu } from './components/ui/ContextMenu'
 import { Dialog } from './components/ui/Dialog'
+import { EmptyState } from './components/ui/EmptyState'
 import { Input } from './components/ui/Input'
 import { Select } from './components/ui/Select'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
@@ -3446,11 +3447,12 @@ export default function App() {
 
           {providers.length === 0
             ? (
-                <div className="empty" style={{ padding: '32px 0' }}>
-                  <div className="empty-icon"><Icon name="plug" size={34} /></div>
-                  <div className="empty-text">暂无供应商配置</div>
-                  <div className="empty-hint">点击右上角"+ 新增供应商"开始配置</div>
-                </div>
+                <EmptyState
+                  className="settings-empty-state"
+                  description="点击右上角“+ 新增供应商”开始配置"
+                  icon={<Icon name="plug" size={34} />}
+                  title="暂无供应商配置"
+                />
               )
             : (
                 <div className="provider-list">
@@ -3491,11 +3493,12 @@ export default function App() {
 
           {!upscaleProviders.length
             ? (
-                <div className="empty" style={{ padding: '32px 0' }}>
-                  <div className="empty-icon"><Icon name="upscale" size={34} /></div>
-                  <div className="empty-text">暂无超分服务配置</div>
-                  <div className="empty-hint">点击右上角"+ 新增超分服务"开始配置</div>
-                </div>
+                <EmptyState
+                  className="settings-empty-state"
+                  description="点击右上角“+ 新增超分服务”开始配置"
+                  icon={<Icon name="upscale" size={34} />}
+                  title="暂无超分服务配置"
+                />
               )
             : (
                 <div className="provider-list">

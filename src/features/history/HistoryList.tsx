@@ -1,6 +1,7 @@
 import type { HistoryRecord } from '../../lib/storage'
 import { useEffect, useRef } from 'react'
 import { Icon } from '../../components/Icon'
+import { EmptyState } from '../../components/ui/EmptyState'
 import type { CropMarginIncomingImage } from '../crop-margin/types'
 import { HistoryRecordCard } from './HistoryRecordCard'
 
@@ -78,18 +79,21 @@ export function HistoryList(props: HistoryListProps) {
       <div className="history-record-scroll" ref={scrollRef}>
         {isLoading && !historyRecords.length
           ? (
-              <div className="empty history-empty-state">
-                <div className="empty-icon"><span className="spinner" /></div>
-                <div className="empty-text">正在加载历史记录</div>
-              </div>
+              <EmptyState
+                className="history-empty-state"
+                icon={<span className="spinner" />}
+                live="polite"
+                title="正在加载历史记录"
+              />
             )
           : !historyRecords.length
               ? (
-                  <div className="empty history-empty-state">
-                    <div className="empty-icon"><Icon name="history" size={34} /></div>
-                    <div className="empty-text">{emptyText}</div>
-                    <div className="empty-hint">{emptyHint}</div>
-                  </div>
+                  <EmptyState
+                    className="history-empty-state"
+                    description={emptyHint}
+                    icon={<Icon name="history" size={34} />}
+                    title={emptyText}
+                  />
                 )
               : (
                   <>

@@ -3526,6 +3526,21 @@ button:disabled {
   font-size: 12px;
 }
 
+.ui-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-1);
+}
+
+.ui-empty-state .empty-icon,
+.ui-empty-state .empty-text {
+  margin: 0;
+}
+
+.settings-empty-state {
+  padding: 32px 0;
+}
+
 .storage-setting-card {
   border: 1px solid var(--border);
   border-radius: 18px;
