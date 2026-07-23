@@ -107,7 +107,6 @@ body {
 
 button,
 input,
-select,
 textarea {
   font: inherit;
 }
@@ -1228,7 +1227,7 @@ button.danger:hover:not(:disabled) {
   margin-bottom: 12px;
 }
 
-.provider-select-bar select {
+.provider-select-bar .ui-select {
   flex: 1;
   min-width: 0;
 }
@@ -1508,7 +1507,6 @@ label {
 }
 
 input,
-select,
 textarea {
   width: 100%;
   padding: 10px var(--space-3);
@@ -1525,7 +1523,6 @@ textarea {
 }
 
 input:focus,
-select:focus,
 textarea:focus {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
@@ -1932,10 +1929,132 @@ button:disabled {
   color: var(--err);
 }
 
-.ui-input,
-.ui-select {
+.ui-input {
   height: var(--control-height-standard);
   min-height: var(--control-height-standard);
+}
+
+.ui-select {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: var(--control-height-standard);
+  min-height: var(--control-height-standard);
+}
+
+.ui-select.is-open {
+  z-index: 70;
+}
+
+.ui-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0 38px 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: var(--font-size-label);
+  font-weight: 400;
+  text-align: left;
+  box-shadow: none;
+}
+
+.ui-select-trigger::after {
+  position: absolute;
+  right: 15px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--text-secondary);
+  content: '';
+  pointer-events: none;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform var(--transition-fast);
+}
+
+.ui-select-trigger:hover:not(:disabled),
+.ui-select.is-open .ui-select-trigger {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--input-bg));
+  color: var(--text);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+  transform: none;
+}
+
+.ui-select.is-open .ui-select-trigger {
+  box-shadow: var(--focus-ring);
+}
+
+.ui-select.is-open .ui-select-trigger::after {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.ui-select-trigger:disabled {
+  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--panel-solid) 76%, var(--input-bg));
+  color: color-mix(in srgb, var(--text-secondary) 68%, transparent);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.ui-select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 60;
+  display: grid;
+  gap: 2px;
+  max-height: 240px;
+  padding: var(--space-1);
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: var(--radius-control);
+  background: var(--panel-solid);
+  box-shadow: 0 16px 32px var(--shadow), 0 0 0 1px color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.ui-select-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--control-height-compact);
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-label);
+  font-weight: 400;
+  text-align: left;
+  box-shadow: none;
+}
+
+.ui-select-option:hover:not(:disabled),
+.ui-select-option:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: var(--accent-light);
+  color: var(--text);
+  outline: none;
+  transform: none;
+  box-shadow: none;
+}
+
+.ui-select-option.active {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel-solid));
+  color: var(--accent);
+}
+
+.ui-select-option:disabled {
+  color: color-mix(in srgb, var(--text-secondary) 58%, transparent);
+  cursor: not-allowed;
 }
 
 .ui-segmented-control {
@@ -3634,8 +3753,7 @@ button:disabled {
   align-items: center;
 }
 
-.storage-limit-controls input,
-.storage-limit-controls select {
+.storage-limit-controls input {
   height: 40px;
   padding: 0 12px;
   border-radius: 10px;
@@ -3655,40 +3773,26 @@ button:disabled {
   appearance: none;
 }
 
-.storage-limit-controls select {
+.storage-limit-controls .ui-select {
   min-width: 124px;
-  padding-right: 42px;
-  appearance: none;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
-    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
-  background-position:
-    calc(100% - 20px) 17px,
-    calc(100% - 14px) 17px;
-  background-repeat: no-repeat;
-  background-size: 6px 6px;
 }
 
-.storage-limit-controls input:hover:not(:disabled),
-.storage-limit-controls select:hover:not(:disabled) {
+.storage-limit-controls input:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
   background-color: color-mix(in srgb, var(--accent) 6%, var(--input-bg));
 }
 
-.storage-limit-controls input:focus,
-.storage-limit-controls select:focus {
+.storage-limit-controls input:focus {
   border-color: var(--accent);
   background-color: var(--input-bg);
   box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
 }
 
-[data-theme='dark'] .storage-limit-controls input:focus,
-[data-theme='dark'] .storage-limit-controls select:focus {
+[data-theme='dark'] .storage-limit-controls input:focus {
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
-.storage-limit-controls input:disabled,
-.storage-limit-controls select:disabled {
+.storage-limit-controls input:disabled {
   cursor: not-allowed;
   opacity: 0.58;
 }
@@ -3815,12 +3919,20 @@ button:disabled {
   letter-spacing: 0.12em;
 }
 
-.history-filter-field input,
-.history-filter-field select {
+.history-filter-field input {
   height: var(--control-height-compact);
   min-height: var(--control-height-compact);
   padding-top: 0;
   padding-bottom: 0;
+  font-size: 12px;
+}
+
+.history-filter-field .ui-select {
+  height: var(--control-height-compact);
+  min-height: var(--control-height-compact);
+}
+
+.history-filter-field .ui-select-trigger {
   font-size: 12px;
 }
 

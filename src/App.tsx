@@ -2618,15 +2618,14 @@ export default function App() {
             </div>
 
             <div className="provider-select-bar">
-              <select
+              <Select
                 value={currentProviderId}
-                onChange={event => onProviderChange(event.target.value)}
-              >
-                <option value="">请选择供应商</option>
-                {providers.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: '请选择供应商' },
+                  ...providers.map(provider => ({ value: provider.id, label: provider.name })),
+                ]}
+                onValueChange={onProviderChange}
+              />
               <button type="button" disabled={!currentProvider} onClick={() => void loadModels()}>
                 拉模型
               </button>
@@ -2787,41 +2786,55 @@ export default function App() {
               </div>
               <div>
                 <label htmlFor="quality">质量</label>
-                <select id="quality" value={params.quality} onChange={event => setParams(current => ({ ...current, quality: event.target.value }))}>
-                  <option value="auto">auto</option>
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                </select>
+                <Select
+                  id="quality"
+                  value={params.quality}
+                  options={[
+                    { value: 'auto', label: 'auto' },
+                    { value: 'low', label: 'low' },
+                    { value: 'medium', label: 'medium' },
+                    { value: 'high', label: 'high' },
+                  ]}
+                  onValueChange={value => setParams(current => ({ ...current, quality: value }))}
+                />
               </div>
               <div>
                 <label htmlFor="autoPrompt">自动补全</label>
-                <select id="autoPrompt" value={params.autoPrompt} onChange={event => setParams(current => ({ ...current, autoPrompt: event.target.value }))}>
-                  <option value="false">false</option>
-                  <option value="true">true</option>
-                </select>
+                <Select
+                  id="autoPrompt"
+                  value={params.autoPrompt}
+                  options={[{ value: 'false', label: 'false' }, { value: 'true', label: 'true' }]}
+                  onValueChange={value => setParams(current => ({ ...current, autoPrompt: value }))}
+                />
               </div>
               <div>
                 <label htmlFor="promptSizeHint">尺寸加入 Prompt</label>
-                <select id="promptSizeHint" value={params.promptSizeHint || 'false'} onChange={event => setParams(current => ({ ...current, promptSizeHint: event.target.value }))}>
-                  <option value="false">不添加</option>
-                  <option value="true">添加</option>
-                </select>
+                <Select
+                  id="promptSizeHint"
+                  value={params.promptSizeHint || 'false'}
+                  options={[{ value: 'false', label: '不添加' }, { value: 'true', label: '添加' }]}
+                  onValueChange={value => setParams(current => ({ ...current, promptSizeHint: value }))}
+                />
               </div>
               <div>
                 <label htmlFor="translate">自动翻译</label>
-                <select id="translate" value={params.translate} onChange={event => setParams(current => ({ ...current, translate: event.target.value }))}>
-                  <option value="false">false</option>
-                  <option value="true">true</option>
-                </select>
+                <Select
+                  id="translate"
+                  value={params.translate}
+                  options={[{ value: 'false', label: 'false' }, { value: 'true', label: 'true' }]}
+                  onValueChange={value => setParams(current => ({ ...current, translate: value }))}
+                />
               </div>
               {currentModel?.hasResolution && resolutionOptions.length
                 ? (
                     <div>
                       <label htmlFor="resolution">分辨率</label>
-                      <select id="resolution" value={params.resolution || ''} onChange={event => setParams(current => ({ ...current, resolution: event.target.value }))}>
-                        {resolutionOptions.map(value => <option key={value} value={value}>{value}</option>)}
-                      </select>
+                      <Select
+                        id="resolution"
+                        value={params.resolution || ''}
+                        options={resolutionOptions.map(value => ({ value, label: value }))}
+                        onValueChange={value => setParams(current => ({ ...current, resolution: value }))}
+                      />
                     </div>
                   )
                 : null}
@@ -3569,11 +3582,9 @@ export default function App() {
                 <Select
                   value={storageLimitUnit}
                   disabled={!storageLimitEnabled || storagePolicyPending}
-                  onChange={event => setStorageLimitUnit(event.target.value as StorageLimitUnit)}
-                >
-                  <option value="GB">GB</option>
-                  <option value="MB">MB</option>
-                </Select>
+                  options={[{ value: 'GB', label: 'GB' }, { value: 'MB', label: 'MB' }]}
+                  onValueChange={value => setStorageLimitUnit(value as StorageLimitUnit)}
+                />
                 <Button
                   disabled={storagePolicyPending || (storageLimitEnabled && !storageLimitBytes)}
                   onClick={() => void saveHistoryStoragePolicy()}

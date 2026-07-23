@@ -66,18 +66,28 @@ export function HistoryToolbar(props: HistoryToolbarProps) {
           <Input id="history-search" value={historySearch} placeholder="按关键词检索历史描述..." onChange={event => onHistorySearchChange(event.target.value)} />
         </Field>
         <Field className="history-filter-field history-filter-compact" htmlFor="history-mode-filter" label="类别筛选">
-          <Select id="history-mode-filter" value={historyModeFilter} onChange={event => onHistoryModeFilterChange(event.target.value as 'all' | 'gen' | 'edit' | 'upscale')}>
-            <option value="all">全部类别</option>
-            <option value="gen">文生图</option>
-            <option value="edit">图生图</option>
-            <option value="upscale">单独超分</option>
-          </Select>
+          <Select
+            id="history-mode-filter"
+            value={historyModeFilter}
+            options={[
+              { value: 'all', label: '全部类别' },
+              { value: 'gen', label: '文生图' },
+              { value: 'edit', label: '图生图' },
+              { value: 'upscale', label: '单独超分' },
+            ]}
+            onValueChange={value => onHistoryModeFilterChange(value as 'all' | 'gen' | 'edit' | 'upscale')}
+          />
         </Field>
         <Field className="history-filter-field history-filter-compact" htmlFor="history-model-filter" label="模型筛选">
-          <Select id="history-model-filter" value={historyModelFilter} onChange={event => onHistoryModelFilterChange(event.target.value)}>
-            <option value="">全部模型</option>
-            {modelFilterOptions.map(modelId => <option key={modelId} value={modelId}>{modelId}</option>)}
-          </Select>
+          <Select
+            id="history-model-filter"
+            value={historyModelFilter}
+            options={[
+              { value: '', label: '全部模型' },
+              ...modelFilterOptions.map(modelId => ({ value: modelId, label: modelId })),
+            ]}
+            onValueChange={onHistoryModelFilterChange}
+          />
         </Field>
       </div>
     </div>
