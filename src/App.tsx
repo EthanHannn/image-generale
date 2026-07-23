@@ -7,6 +7,7 @@ import { ContextMenu } from './components/ui/ContextMenu'
 import { Dialog } from './components/ui/Dialog'
 import { EmptyState } from './components/ui/EmptyState'
 import { Input } from './components/ui/Input'
+import { ImageActionBar } from './components/ui/ImageActionBar'
 import { SectionHeader } from './components/ui/SectionHeader'
 import { Select } from './components/ui/Select'
 import { StatusMessage, type StatusMessageType } from './components/ui/StatusMessage'
@@ -3121,9 +3122,9 @@ export default function App() {
                                 </div>
                               )}
                           <div className="result-actions">
-                            <div className="result-primary-actions">
+                            <ImageActionBar className="result-primary-actions" label={`结果 ${index + 1} 操作`}>
                               <button className={`dl-btn ${downloadedIndex === index ? 'downloaded' : ''}`} type="button" onClick={() => void handleDownload(index)}>
-                                {downloadedIndex === index ? '已保存' : '下载图片'}
+                                {downloadedIndex === index ? '已保存' : '保存图片'}
                               </button>
                               <button className="dl-btn" type="button" onClick={() => void handleCopy(index)}>
                                 {copiedIndex === index ? '已复制' : '复制 Base64'}
@@ -3131,7 +3132,7 @@ export default function App() {
                               <button className="dl-btn" type="button" onClick={() => void sendResultToCropMargin(index)}>
                                 发送到裁剪台
                               </button>
-                            </div>
+                            </ImageActionBar>
                             {image.b64_json
                               ? (
                                   <div className="result-upscale-row">
@@ -3273,10 +3274,10 @@ export default function App() {
             </div>
               {outputUrl
                 ? (
-                  <div className="standalone-preview-actions">
+                  <ImageActionBar className="standalone-preview-actions" label="超分结果操作">
+                    <button className="dl-btn" type="button" onClick={() => void downloadStandaloneOutput()}>保存超分图</button>
                     <button className="dl-btn" type="button" onClick={() => sendStandaloneWorkbenchToCropMargin()}>全部发送到裁剪台</button>
-                    <button className="dl-btn" type="button" onClick={() => void downloadStandaloneOutput()}>下载超分图</button>
-                  </div>
+                  </ImageActionBar>
                 )
               : null}
           </div>

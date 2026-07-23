@@ -2559,8 +2559,8 @@ button:disabled {
 
 .result-primary-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: var(--space-2);
 }
 
 .favorite-btn,
@@ -2867,10 +2867,10 @@ button:disabled {
 }
 
 .standalone-preview-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: var(--space-2);
+  min-width: min(100%, 280px);
 }
 
 .standalone-send-btn {

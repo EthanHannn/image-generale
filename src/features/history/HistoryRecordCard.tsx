@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ContextMenu } from '../../components/ui/ContextMenu'
+import { ImageActionBar } from '../../components/ui/ImageActionBar'
 import type { MouseEvent } from 'react'
 import { saveImageFile } from '../../lib/files'
 import { getErrorMessage } from '../../lib/errors'
@@ -357,11 +358,11 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
           <span className="meta-item">模式 {record.mode === 'edit' ? '编辑' : '生成'}</span>
         </div>
       </div>
-      <div className="card-actions history-card-actions" onClick={event => event.stopPropagation()}>
+      <ImageActionBar className="card-actions history-card-actions" label="历史记录操作" onClick={event => event.stopPropagation()}>
         <button className="history-action-btn primary-btn" type="button" onClick={() => record.id && void onRecallHistory(record.id)}>{record.mode === 'upscale' ? '回显到超分台' : '回显到工作台'}</button>
         <button className="history-action-btn" type="button" disabled={!canUseRecordImages} onClick={() => void sendRecordToCropMargin()}>发送到裁剪台</button>
         <button className="history-action-btn delete-btn" type="button" onClick={() => record.id && void onRemoveHistory(record.id, record.isFavorite)}>删除记录</button>
-      </div>
+      </ImageActionBar>
       {hasPreview
         ? createPortal(
             <div className="history-preview-modal" onClick={() => setPreviewIndex(null)}>
