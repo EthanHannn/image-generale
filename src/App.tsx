@@ -7,6 +7,7 @@ import { ContextMenu } from './components/ui/ContextMenu'
 import { Dialog } from './components/ui/Dialog'
 import { EmptyState } from './components/ui/EmptyState'
 import { Input } from './components/ui/Input'
+import { SectionHeader } from './components/ui/SectionHeader'
 import { Select } from './components/ui/Select'
 import { CropMarginView } from './features/crop-margin/CropMarginView'
 import { mergeCropMarginSources, normalizeCropMarginIncomingSource } from './features/crop-margin/cropMarginQueue'
@@ -3437,13 +3438,11 @@ export default function App() {
 
         <div className="settings-grid">
         <section className="panel settings-panel provider-section">
-          <div className="panel-heading">
-            <div>
-              <h2>供应商管理</h2>
-              <div className="panel-caption">管理 API 供应商配置，工作台下拉框可随时切换使用中的供应商。</div>
-            </div>
-            <button type="button" onClick={openCreateModal}>+ 新增供应商</button>
-          </div>
+          <SectionHeader
+            actions={<Button onClick={openCreateModal}>+ 新增供应商</Button>}
+            description="管理 API 供应商配置，工作台下拉框可随时切换使用中的供应商。"
+            title="供应商管理"
+          />
 
           {providers.length === 0
             ? (
@@ -3483,13 +3482,11 @@ export default function App() {
         </section>
 
         <section className="panel settings-panel upscale-section">
-          <div className="panel-heading">
-            <div>
-              <h2>图像超分</h2>
-              <div className="panel-caption">管理超分服务配置，结果区会使用当前选中的服务提升图片分辨率。</div>
-            </div>
-            <button type="button" onClick={openCreateUpscaleModal}>+ 新增超分服务</button>
-          </div>
+          <SectionHeader
+            actions={<Button onClick={openCreateUpscaleModal}>+ 新增超分服务</Button>}
+            description="管理超分服务配置，结果区会使用当前选中的服务提升图片分辨率。"
+            title="图像超分"
+          />
 
           {!upscaleProviders.length
             ? (
@@ -3531,12 +3528,7 @@ export default function App() {
         </section>
 
         <section className="panel settings-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>历史存储</h2>
-              <div className="panel-caption">查看当前存储路径、打开目录或切换新目录。</div>
-            </div>
-          </div>
+          <SectionHeader description="查看当前存储路径、打开目录或切换新目录。" title="历史存储" />
           <div className="storage-setting-card">
             <div className="storage-setting-head">
               <div>
@@ -3602,12 +3594,7 @@ export default function App() {
         </section>
 
         <section className="panel settings-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>外观主题</h2>
-              <div className="panel-caption">选择深色、浅色或跟随系统，偏好会立即保存并同步到整个工作台。</div>
-            </div>
-          </div>
+          <SectionHeader description="选择深色、浅色或跟随系统，偏好会立即保存并同步到整个工作台。" title="外观主题" />
           <div className="theme-setting-card">
             <div className="theme-mode-label">
               <span className="theme-swatch current" />

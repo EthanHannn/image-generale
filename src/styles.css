@@ -929,6 +929,13 @@ button {
   line-height: 1.6;
 }
 
+.ui-section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .result-meta-badge {
   display: flex;
   flex-direction: column;
