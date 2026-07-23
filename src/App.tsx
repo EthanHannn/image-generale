@@ -76,7 +76,9 @@ type ImageContextMenuState = {
   target: ImageContextMenuTarget
 }
 type GlobalDropTarget =
-  | { status: 'ready'; kind: 'workspace' | 'upscale' | 'cropMargin'; title: string; hint: string }
+  | { status: 'ready'; kind: 'reference'; role: ReferenceRole; title: string; hint: string }
+  | { status: 'ready'; kind: 'upscale' | 'cropMargin'; title: string; hint: string }
+  | { status: 'blocked'; kind: 'reference'; role: ReferenceRole; title: string; hint: string }
   | { status: 'blocked'; title: string; hint: string }
 type ImagePreviewState = {
   image: string
@@ -663,7 +665,7 @@ export default function App() {
     return Array.from(files || []).filter(file => file.type.startsWith('image/'))
   }
 
-  function getGlobalDropTarget(): GlobalDropTarget {
+  function getGlobalDropTarget(event: globalThis.DragEvent): GlobalDropTarget {
     const hasHistoryPreview = !!document.querySelector('.history-preview-modal')
     if (previewImage || providerModalOpen || upscaleModalOpen || hasHistoryPreview) {
       return {
@@ -688,10 +690,23 @@ export default function App() {
           hint: '等待当前任务结束后再替换参考图。',
         }
       }
+
+      const role: ReferenceRole = event.clientX < window.innerWidth / 2 ? 'style' : 'character'
+      if (role === 'character' && !characterReferenceEnabled) {
+        return {
+          status: 'blocked',
+          kind: 'reference',
+          role,
+          title: '当前模型不支持角色图',
+          hint: '请将图片拖到风格图区，或切换支持两张参考图的模型。',
+        }
+      }
       return {
-        status: 'blocked',
-        title: '请选择参考图用途',
-        hint: '请将图片拖到风格图或角色图对应的区域。',
+        status: 'ready',
+        kind: 'reference',
+        role,
+        title: `松开以添加${role === 'style' ? '风格图' : '角色图'}`,
+        hint: role === 'style' ? '用于提取画面风格、色彩、光影与构图。' : '用于保留人物身份、面部、服装与体态。',
       }
     }
 
@@ -728,7 +743,7 @@ export default function App() {
   }
 
   function handleGlobalDrop(event: globalThis.DragEvent) {
-    const dropTarget = getGlobalDropTarget()
+    const dropTarget = getGlobalDropTarget(event)
     const imageFiles = getImageFiles(event.dataTransfer?.files)
     if (!imageFiles.length) {
       showToast('请拖入图片文件', 'error')
@@ -737,6 +752,11 @@ export default function App() {
 
     if (dropTarget.status === 'blocked') {
       showToast(dropTarget.title, 'error')
+      return
+    }
+
+    if (dropTarget.kind === 'reference') {
+      setReferenceFile(dropTarget.role, imageFiles)
       return
     }
 
@@ -750,7 +770,7 @@ export default function App() {
 
   useEffect(() => {
     function updateDropTarget(event: globalThis.DragEvent) {
-      const dropTarget = getGlobalDropTarget()
+      const dropTarget = getGlobalDropTarget(event)
       setGlobalDropTarget(dropTarget)
       if (event.dataTransfer)
         event.dataTransfer.dropEffect = dropTarget.status === 'ready' ? 'copy' : 'none'
@@ -1409,6 +1429,8 @@ export default function App() {
   function handleReferenceDrop(event: DragEvent<HTMLButtonElement>, role: ReferenceRole) {
     event.preventDefault()
     event.stopPropagation()
+    dragDepthRef.current = 0
+    setGlobalDropTarget(null)
     setReferenceFile(role, event.dataTransfer.files)
   }
 
@@ -3752,15 +3774,32 @@ export default function App() {
 
       {globalDropTarget
         ? (
-            <div className={`global-drop-overlay ${globalDropTarget.status}`}>
-              <div className="global-drop-panel">
-                <div className="global-drop-icon">
-                  <Icon name={globalDropTarget.status === 'ready' ? 'upload' : 'alert'} size={26} />
-                </div>
-                <strong>{globalDropTarget.title}</strong>
-                <span>{globalDropTarget.hint}</span>
-              </div>
-            </div>
+            'kind' in globalDropTarget && globalDropTarget.kind === 'reference'
+              ? (
+                  <div className="global-drop-overlay reference-drop-overlay" aria-hidden="true">
+                    <div className={`reference-drop-overlay-zone style ${globalDropTarget.role === 'style' ? 'active' : ''}`}>
+                      <Icon name="upload" size={28} />
+                      <strong>风格图</strong>
+                      <span>放到左侧，提取画面风格、色彩、光影与构图</span>
+                    </div>
+                    <div className={`reference-drop-overlay-zone character ${globalDropTarget.role === 'character' ? 'active' : ''} ${globalDropTarget.status === 'blocked' ? 'is-disabled' : ''}`}>
+                      <Icon name={globalDropTarget.status === 'blocked' ? 'alert' : 'upload'} size={28} />
+                      <strong>角色图</strong>
+                      <span>{globalDropTarget.status === 'blocked' ? '当前模型不支持角色图' : '放到右侧，保留人物身份、面部、服装与体态'}</span>
+                    </div>
+                  </div>
+                )
+              : (
+                  <div className={`global-drop-overlay ${globalDropTarget.status}`}>
+                    <div className="global-drop-panel">
+                      <div className="global-drop-icon">
+                        <Icon name={globalDropTarget.status === 'ready' ? 'upload' : 'alert'} size={26} />
+                      </div>
+                      <strong>{globalDropTarget.title}</strong>
+                      <span>{globalDropTarget.hint}</span>
+                    </div>
+                  </div>
+                )
           )
         : null}
 

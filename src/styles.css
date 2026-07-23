@@ -2615,6 +2615,59 @@ button:disabled {
   pointer-events: none;
 }
 
+.reference-drop-overlay {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  place-items: stretch;
+  padding: 24px;
+}
+
+.reference-drop-overlay-zone {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 28px;
+  border: 1px dashed color-mix(in srgb, var(--border) 86%, var(--text-secondary));
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--panel-solid) 68%, transparent);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.reference-drop-overlay-zone strong {
+  color: var(--text);
+  font-size: 20px;
+}
+
+.reference-drop-overlay-zone span {
+  max-width: 280px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.reference-drop-overlay-zone.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-solid));
+  color: var(--accent);
+  box-shadow: 0 0 0 2px var(--focus-ring-color), 0 20px 48px var(--shadow);
+}
+
+.reference-drop-overlay-zone.active strong {
+  color: var(--accent);
+}
+
+.reference-drop-overlay-zone.is-disabled {
+  border-color: color-mix(in srgb, var(--err) 62%, var(--border));
+  background: color-mix(in srgb, var(--err) 10%, var(--panel-solid));
+  color: var(--err);
+}
+
+.reference-drop-overlay-zone.is-disabled strong {
+  color: var(--err);
+}
+
 .global-drop-panel {
   display: grid;
   justify-items: center;
