@@ -522,6 +522,16 @@ export default function App() {
         return
       }
 
+      const sidebarView = getSidebarShortcutTarget(event)
+      if (sidebarView) {
+        if (globalDropTarget || imageContextMenu || previewImage || providerModalOpen || upscaleModalOpen)
+          return
+
+        event.preventDefault()
+        setView(sidebarView)
+        return
+      }
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'g') {
         event.preventDefault()
         focusPromptInput()
@@ -2606,12 +2616,12 @@ export default function App() {
     return <StatusMessage message={status.message} type={status.type} />
   }
 
-  const navItems: Array<{ id: ViewName; label: string; icon: IconName; hint: string }> = [
-    { id: 'workspace', label: '工作台', icon: 'navWorkspace', hint: '生成与结果' },
-    { id: 'upscale', label: '超分', icon: 'navUpscale', hint: '独立放大' },
-    { id: 'cropMargin', label: '裁剪台', icon: 'navCrop', hint: '扩边裁线' },
-    { id: 'history', label: '历史记录', icon: 'navHistory', hint: '资产浏览' },
-    { id: 'settings', label: '设置', icon: 'navSettings', hint: '系统与配置' },
+  const navItems: Array<{ id: ViewName; label: string; icon: IconName; hint: string; shortcut: string }> = [
+    { id: 'workspace', label: '工作台', icon: 'navWorkspace', hint: '生成与结果', shortcut: getSidebarShortcutLabel('workspace') },
+    { id: 'upscale', label: '超分', icon: 'navUpscale', hint: '独立放大', shortcut: getSidebarShortcutLabel('upscale') },
+    { id: 'cropMargin', label: '裁剪台', icon: 'navCrop', hint: '扩边裁线', shortcut: getSidebarShortcutLabel('cropMargin') },
+    { id: 'history', label: '历史记录', icon: 'navHistory', hint: '资产浏览', shortcut: getSidebarShortcutLabel('history') },
+    { id: 'settings', label: '设置', icon: 'navSettings', hint: '系统与配置', shortcut: getSidebarShortcutLabel('settings') },
   ]
   const nextSidebarTheme: ThemeName = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'
   const viewTitle = view === 'workspace' ? '工作台' : view === 'upscale' ? '超分' : view === 'cropMargin' ? '裁剪台' : view === 'history' ? '历史记录' : '设置'
@@ -3699,7 +3709,8 @@ export default function App() {
                 key={item.id}
                 type="button"
                 className={`shell-nav-item ${view === item.id ? 'active' : ''}`}
-                title={item.label}
+                title={`${item.label}（${item.shortcut}）`}
+                aria-label={`${item.label}，快捷键 ${item.shortcut}`}
                 onClick={() => setView(item.id)}
               >
                 <span className="shell-nav-icon"><Icon name={item.icon} size={21} strokeWidth={1.7} /></span>
@@ -4443,6 +4454,40 @@ function makeTargetSizeFromParams(params: RequestParams): TargetSizeState {
   }
 
   return makeTargetSizeFromPreset(params.size || '')
+}
+
+function getSidebarShortcutTarget(event: KeyboardEvent): ViewName | null {
+  if (event.isComposing || event.shiftKey)
+    return null
+
+  if (isMacPlatform()) {
+    if (!event.metaKey || event.ctrlKey || event.altKey)
+      return null
+    if (event.code === 'Comma')
+      return 'settings'
+  }
+  else {
+    if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === 'Comma')
+      return 'settings'
+    if (!event.altKey || event.ctrlKey || event.metaKey)
+      return null
+  }
+
+  const index = Number(event.code.replace('Digit', ''))
+  return (['workspace', 'upscale', 'cropMargin', 'history', 'settings'] as const)[index - 1] || null
+}
+
+function getSidebarShortcutLabel(view: ViewName) {
+  const index = (['workspace', 'upscale', 'cropMargin', 'history', 'settings'] as const).indexOf(view) + 1
+  const primary = isMacPlatform() ? `⌘${index}` : `Alt+${index}`
+
+  return view === 'settings'
+    ? `${primary} / ${isMacPlatform() ? '⌘,' : 'Ctrl+,'}`
+    : primary
+}
+
+function isMacPlatform() {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 }
 
 function formatImageDimensions(dimensions: ImageDimensions) {
