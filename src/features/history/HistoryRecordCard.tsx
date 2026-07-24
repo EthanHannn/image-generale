@@ -49,6 +49,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
   const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(null)
   const promptSummary = record.prompt || '(无 Prompt)'
   const modeText = getHistoryModeText(record.mode)
+  const ratioLabel = getHistoryRatioLabel(record)
   const sizeLabel = getHistorySizeLabel(record)
   const titleLabel = record.mode === 'upscale' ? (record.providerName || record.modelName || '超分服务') : record.modelId
   const previewUrl = previewIndex !== null ? previewImageUrls[previewIndex] : ''
@@ -348,8 +349,9 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
           <span className={`history-mode-tag ${record.mode === 'edit' ? 'edit' : record.mode === 'upscale' ? 'upscale' : 'gen'}`}>
             {modeText}
           </span>
-          <span>{record.imageCount} 张图片</span>
+          {ratioLabel ? <span className="history-ratio-tag">{ratioLabel}</span> : null}
           <span>{sizeLabel}</span>
+          <span>{record.imageCount} 张图片</span>
           <span>{record.duration}s</span>
         </div>
         <div className="card-meta">
@@ -591,6 +593,18 @@ function getHistorySizeLabel(record: HistoryRecord) {
     return `${source} -> ${output}`
   }
   return record.params.resolution || record.params.size || '未记录尺寸'
+}
+
+function getHistoryRatioLabel(record: HistoryRecord) {
+  if (record.params.targetSizeMode !== 'ratio')
+    return ''
+
+  const ratio = record.params.targetRatio?.trim()
+  if (!ratio || !/^\d+:\d+$/.test(ratio))
+    return ''
+
+  const [width, height] = ratio.split(':').map(Number)
+  return width > 0 && height > 0 ? ratio : ''
 }
 
 function hasFullHistoryImages(record: HistoryRecord) {
