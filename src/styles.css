@@ -4962,9 +4962,10 @@ textarea {
 
 .toast {
   position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%) translateY(120px);
+  top: 56px;
+  right: 24px;
+  transform: translateX(calc(100% + 28px));
+  max-width: min(380px, calc(100vw - 112px));
   min-width: 240px;
   padding: 12px 16px;
   border-radius: 14px;
@@ -4978,7 +4979,7 @@ textarea {
 }
 
 .toast.show {
-  transform: translateX(-50%) translateY(0);
+  transform: translateX(0);
 }
 
 .toast.success {

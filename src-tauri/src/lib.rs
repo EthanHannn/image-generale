@@ -141,6 +141,8 @@ struct AppConfig {
     theme: String,
     history_root_dir: String,
     #[serde(default)]
+    save_directory: String,
+    #[serde(default)]
     history_storage_policy: HistoryStoragePolicy,
 }
 
@@ -282,6 +284,7 @@ impl Default for AppConfig {
             current_upscale_provider_id: String::new(),
             theme: String::from("dark"),
             history_root_dir: String::new(),
+            save_directory: String::new(),
             history_storage_policy: HistoryStoragePolicy::default(),
         }
     }
@@ -817,7 +820,12 @@ fn load_app_config(app: AppHandle) -> Result<Option<AppConfig>, String> {
 }
 
 #[tauri::command]
-fn save_app_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
+fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
+    if config.save_directory.trim().is_empty() {
+        if let Some(current) = load_app_config(app.clone())? {
+            config.save_directory = current.save_directory;
+        }
+    }
     let path = config_file_path(&app)?;
     let text = serde_json::to_string_pretty(&config).map_err(|error| error.to_string())?;
     fs::write(path, text).map_err(|error| error.to_string())
@@ -909,6 +917,26 @@ fn unique_save_path(path: PathBuf) -> PathBuf {
     path
 }
 
+fn preferred_save_directory(app: &AppHandle) -> Option<PathBuf> {
+    let configured_directory = load_app_config(app.clone())
+        .ok()
+        .flatten()
+        .map(|config| PathBuf::from(config.save_directory))
+        .filter(|directory| directory.is_dir());
+    configured_directory.or_else(|| app.path().download_dir().ok())
+}
+
+fn remember_save_directory(app: &AppHandle, directory: &Path) {
+    if !directory.is_dir() {
+        return;
+    }
+
+    if let Ok(mut config) = load_app_config(app.clone()).map(|config| config.unwrap_or_default()) {
+        config.save_directory = directory.to_string_lossy().to_string();
+        let _ = save_app_config(app.clone(), config);
+    }
+}
+
 #[tauri::command]
 fn save_image_file(
     app: AppHandle,
@@ -922,8 +950,8 @@ fn save_image_file(
     let mut dialog = FileDialog::new()
         .set_file_name(file_name)
         .add_filter(filter_name, extensions);
-    if let Ok(download_dir) = app.path().download_dir() {
-        dialog = dialog.set_directory(download_dir);
+    if let Some(directory) = preferred_save_directory(&app) {
+        dialog = dialog.set_directory(directory);
     }
 
     let Some(selected_path) = dialog.save_file() else {
@@ -939,6 +967,9 @@ fn save_image_file(
         selected_path
     };
     write_image_file(&save_path, &image_base64)?;
+    if let Some(directory) = save_path.parent() {
+        remember_save_directory(&app, directory);
+    }
 
     Ok(SaveImageFileResult {
         status: "saved".to_string(),
@@ -952,8 +983,8 @@ fn save_image_files_to_directory(
     images: Vec<SaveImageBatchItem>,
 ) -> Result<SaveImageBatchResult, String> {
     let mut dialog = FileDialog::new();
-    if let Ok(download_dir) = app.path().download_dir() {
-        dialog = dialog.set_directory(download_dir);
+    if let Some(directory) = preferred_save_directory(&app) {
+        dialog = dialog.set_directory(directory);
     }
 
     let Some(directory) = dialog.pick_folder() else {
@@ -966,6 +997,7 @@ fn save_image_files_to_directory(
     };
 
     fs::create_dir_all(&directory).map_err(|error| format!("创建保存目录失败: {}", error))?;
+    remember_save_directory(&app, &directory);
 
     let mut saved_count = 0;
     let mut failed_count = 0;
