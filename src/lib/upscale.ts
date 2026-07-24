@@ -1,4 +1,4 @@
-import { type UpscaleConfig, normalizeBaseUrl } from './storage'
+import { type AliyunUpscaleMode, type UpscaleConfig, normalizeBaseUrl } from './storage'
 import { getErrorMessage } from './errors'
 
 export type UpscaleResult = {
@@ -7,6 +7,7 @@ export type UpscaleResult = {
   height: number
   localPath?: string
   scale?: number
+  upscaleMode?: AliyunUpscaleMode
   responseJson?: unknown
 }
 
@@ -15,9 +16,17 @@ export async function upscaleImage(
   imageBase64: string,
   targetWidth: number,
   targetHeight: number,
+  aliyunUpscaleMode?: AliyunUpscaleMode,
 ): Promise<UpscaleResult> {
   if (config.provider === 'aliyun')
-    return invokeAliyunUpscale(config.accessKeyId, config.accessKeySecret, imageBase64, targetWidth, targetHeight)
+    return invokeAliyunUpscale(
+      config.accessKeyId,
+      config.accessKeySecret,
+      imageBase64,
+      targetWidth,
+      targetHeight,
+      aliyunUpscaleMode || config.aliyunUpscaleMode,
+    )
   return invokeCustomUpscale(config.apiUrl, config.apiKey, imageBase64, targetWidth, targetHeight)
 }
 
@@ -62,6 +71,7 @@ async function invokeAliyunUpscale(
   imageBase64: string,
   targetWidth: number,
   targetHeight: number,
+  upscaleMode: AliyunUpscaleMode,
 ): Promise<UpscaleResult> {
   const { invoke } = await import('@tauri-apps/api/core')
   const result = await invoke<{
@@ -70,6 +80,7 @@ async function invokeAliyunUpscale(
     height: number
     local_path?: string
     scale?: number
+    upscale_mode?: AliyunUpscaleMode
     response_json?: unknown
   }>('aliyun_upscale', {
     accessKeyId,
@@ -77,6 +88,7 @@ async function invokeAliyunUpscale(
     imageBase64,
     targetWidth,
     targetHeight,
+    upscaleMode,
   }).catch((error: unknown) => {
     throw new Error(getErrorMessage(error))
   })
@@ -86,6 +98,7 @@ async function invokeAliyunUpscale(
     height: result.height,
     localPath: result.local_path,
     scale: result.scale,
+    upscaleMode: result.upscale_mode,
     responseJson: result.response_json,
   }
 }

@@ -36,6 +36,7 @@ import {
   normalizeBaseUrl,
   openHistoryDirectory,
   saveAppConfig,
+  saveHistoryUpscaleMetadata,
   saveHistoryUpscaleVariant,
   selectHistoryDirectory,
   setRecordFavorite,
@@ -48,6 +49,7 @@ import {
   type ProviderConfig,
   type RequestParams,
   type ThemeName,
+  type AliyunUpscaleMode,
   type UpscaleProvider,
   type UpscaleProviderConfig,
 } from './lib/storage'
@@ -65,6 +67,12 @@ type ViewName = 'workspace' | 'upscale' | 'cropMargin' | 'history' | 'settings'
 type UpscaleFactor = 1 | 2 | 3 | 4
 type StandaloneUpscaleFactor = 2 | 3 | 4
 type ImageDimensions = { width: number; height: number }
+type AliyunUpscaleResolution = {
+  dimensions: ImageDimensions
+  requestedMode: AliyunUpscaleMode
+  usedMode: AliyunUpscaleMode
+  fallbackReason?: string
+}
 type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
 type StorageLimitUnit = 'MB' | 'GB'
 type ImageContextMenuTarget =
@@ -173,6 +181,8 @@ const ALIYUN_UPSCALE_MAX_BYTES = 20 * 1024 * 1024
 const ALIYUN_UPSCALE_MIN_SIDE = 64
 const ALIYUN_UPSCALE_MAX_LONG_SIDE = 5000
 const ALIYUN_UPSCALE_MAX_ASPECT_RATIO = 2
+const ALIYUN_STANDARD_UPSCALE_MAX_LONG_SIDE = 1920
+const ALIYUN_STANDARD_UPSCALE_MAX_SHORT_SIDE = 1080
 
 const emptyParams: RequestParams = {
   n: 1,
@@ -1297,6 +1307,7 @@ export default function App() {
       provider: upscaleProviderDraft.provider,
       accessKeyId: upscaleProviderDraft.accessKeyId.trim(),
       accessKeySecret: upscaleProviderDraft.accessKeySecret.trim(),
+      aliyunUpscaleMode: upscaleProviderDraft.aliyunUpscaleMode,
       apiUrl: normalizeBaseUrl(upscaleProviderDraft.apiUrl),
       apiKey: upscaleProviderDraft.apiKey.trim(),
     }
@@ -2120,23 +2131,28 @@ export default function App() {
 
     if (options.auto)
       setAutoUpscalingIndexes(current => ({ ...current, [index]: true }))
-    const dims = currentUpscaleConfig.provider === 'aliyun'
-      ? await validateAliyunUpscaleInput(image.b64_json)
-      : await readBase64ImageSize(image.b64_json).catch(() => parseImageSize(imageSizes[index]))
-    if (!dims) {
-      showToast('图片尺寸尚未就绪，请稍候再试', 'error')
-      if (options.auto)
-        setAutoUpscalingIndexes(current => ({ ...current, [index]: false }))
-      return
-    }
-
-    const targetWidth = options.targetWidth || Math.round(dims.width * selectedFactor)
-    const targetHeight = options.targetHeight || Math.round(dims.height * selectedFactor)
-
-    setUpscalingIndex(index)
-    setUpscaleResponseJson(options.auto ? '自动超分处理中...' : '处理中...')
     try {
-      const out = await upscaleImage(currentUpscaleConfig, image.b64_json, targetWidth, targetHeight)
+      const aliyunResolution = currentUpscaleConfig.provider === 'aliyun'
+        ? await resolveAliyunUpscaleMode(image.b64_json, currentUpscaleConfig.aliyunUpscaleMode)
+        : null
+      const dims = aliyunResolution?.dimensions
+        || await readBase64ImageSize(image.b64_json).catch(() => parseImageSize(imageSizes[index]))
+      if (!dims)
+        throw new Error('图片尺寸尚未就绪，请稍候再试')
+
+      const targetWidth = options.targetWidth || Math.round(dims.width * selectedFactor)
+      const targetHeight = options.targetHeight || Math.round(dims.height * selectedFactor)
+      setUpscalingIndex(index)
+      const processingModeText = aliyunResolution ? `${getAliyunUpscaleModeLabel(aliyunResolution.usedMode)}处理中...` : '处理中...'
+      setUpscaleResponseJson(options.auto ? `自动${processingModeText}` : processingModeText)
+
+      const out = await upscaleImage(
+        currentUpscaleConfig,
+        image.b64_json,
+        targetWidth,
+        targetHeight,
+        aliyunResolution?.usedMode,
+      )
       setResultUpscaleVariants(current => ({
         ...current,
         [index]: {
@@ -2155,9 +2171,18 @@ export default function App() {
       const targetRecordId = options.recordId ?? activeHistoryRecordId
       if (targetRecordId !== null)
         await saveHistoryUpscaleVariant(targetRecordId, index, selectedFactor, out.imageBase64, out.localPath)
+      if (targetRecordId !== null && aliyunResolution) {
+        await saveHistoryUpscaleMetadata(
+          targetRecordId,
+          aliyunResolution.requestedMode,
+          out.upscaleMode || aliyunResolution.usedMode,
+          aliyunResolution.fallbackReason,
+        )
+      }
       await applyStorageCleanup(historyStoragePolicy, true)
       await refreshHistory()
-      showToast(`${options.auto ? '已自动超分至' : '已放大至'} ${out.width} × ${out.height}`, 'success')
+      const modeText = aliyunResolution ? `（${getAliyunUpscaleModeLabel(out.upscaleMode || aliyunResolution.usedMode)}）` : ''
+      showToast(`${options.auto ? '已自动超分至' : '已放大至'} ${out.width} × ${out.height}${modeText}`, 'success')
     }
     catch (error) {
       const message = getErrorMessage(error)
@@ -2270,9 +2295,22 @@ export default function App() {
     const startedAt = performance.now()
     setStandaloneUpscale(current => ({ ...current, isProcessing: true, responseJson: '独立超分处理中...' }))
     try {
-      if (currentUpscaleConfig.provider === 'aliyun')
-        await validateAliyunUpscaleInput(standaloneUpscale.sourceBase64)
-      const out = await upscaleImage(currentUpscaleConfig, standaloneUpscale.sourceBase64, targetWidth, targetHeight)
+      const aliyunResolution = currentUpscaleConfig.provider === 'aliyun'
+        ? await resolveAliyunUpscaleMode(standaloneUpscale.sourceBase64, currentUpscaleConfig.aliyunUpscaleMode)
+        : null
+      if (aliyunResolution) {
+        setStandaloneUpscale(current => ({
+          ...current,
+          responseJson: `独立${getAliyunUpscaleModeLabel(aliyunResolution.usedMode)}处理中...`,
+        }))
+      }
+      const out = await upscaleImage(
+        currentUpscaleConfig,
+        standaloneUpscale.sourceBase64,
+        targetWidth,
+        targetHeight,
+        aliyunResolution?.usedMode,
+      )
       const duration = `${((performance.now() - startedAt) / 1000).toFixed(1)}`
       const responseJson = JSON.stringify(out.responseJson || {
         width: out.width,
@@ -2291,6 +2329,9 @@ export default function App() {
         upscaleProviderId: currentUpscaleProvider?.id,
         upscaleProviderName: currentUpscaleProvider?.name,
         upscaleFactor: standaloneUpscale.factor,
+        upscaleModeRequested: aliyunResolution?.requestedMode,
+        upscaleModeUsed: aliyunResolution ? (out.upscaleMode || aliyunResolution.usedMode) : undefined,
+        upscaleFallbackReason: aliyunResolution?.fallbackReason,
         targetWidth,
         targetHeight,
         outputWidth: out.width,
@@ -2317,6 +2358,9 @@ export default function App() {
             mode: 'standalone-upscale',
             provider: currentUpscaleProvider?.name || '',
             factor: standaloneUpscale.factor,
+            upscaleModeRequested: aliyunResolution?.requestedMode,
+            upscaleModeUsed: aliyunResolution ? (out.upscaleMode || aliyunResolution.usedMode) : undefined,
+            upscaleFallbackReason: aliyunResolution?.fallbackReason,
             targetWidth,
             targetHeight,
             sourceFileName: standaloneUpscale.fileName,
@@ -2364,7 +2408,8 @@ export default function App() {
           },
         },
       }))
-      showToast(`已超分至 ${out.width} × ${out.height}`, 'success')
+      const modeText = aliyunResolution ? `（${getAliyunUpscaleModeLabel(out.upscaleMode || aliyunResolution.usedMode)}）` : ''
+      showToast(`已超分至 ${out.width} × ${out.height}${modeText}`, 'success')
     }
     catch (error) {
       setStandaloneUpscale(current => ({
@@ -3117,9 +3162,11 @@ export default function App() {
                         ? '请先在设置页配置放大服务'
                         : selectedFactor === 1
                           ? '1X 为原图，不需要提升分辨率'
-                          : hasSelectedVariant
-                            ? `当前图片已存在 ${selectedFactor}X 版本`
-                            : ''
+                        : hasSelectedVariant
+                          ? `当前图片已存在 ${selectedFactor}X 版本`
+                          : upscalingIndex !== null
+                            ? '正在处理其他图片的超分任务'
+                          : ''
                       return (
                         <div key={index} className="result-item">
                           <div className="info">
@@ -3555,6 +3602,7 @@ export default function App() {
                       </div>
                       <div className="provider-list-meta">
                         <span className="badge-key">{getUpscaleProviderTypeLabel(p.provider)}</span>
+                        {p.provider === 'aliyun' && <span className="badge-key">{getAliyunUpscaleModeLabel(p.aliyunUpscaleMode)}</span>}
                         {p.id === currentUpscaleProviderId && <span className="badge-in-use">使用中</span>}
                         {isUpscaleProviderConfigured(p) ? <span className="badge-key">已配置</span> : null}
                       </div>
@@ -4174,6 +4222,24 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+                      <div className="row">
+                        <div>
+                          <label htmlFor="modalAliyunUpscaleMode">默认超分版本</label>
+                          <select
+                            id="modalAliyunUpscaleMode"
+                            value={upscaleProviderDraft.aliyunUpscaleMode}
+                            onChange={event => updateUpscaleProviderDraft('aliyunUpscaleMode', event.target.value as AliyunUpscaleMode)}
+                          >
+                            <option value="generative">生成式超分（默认）</option>
+                            <option value="standard">标准版超分</option>
+                          </select>
+                          <small>
+                            {upscaleProviderDraft.aliyunUpscaleMode === 'generative'
+                              ? '长宽比超过 2:1 时，符合标准版尺寸限制的图片会自动使用标准版。'
+                              : '标准版不限制长宽比；长边不超过 1920px、短边不超过 1080px。'}
+                          </small>
+                        </div>
+                      </div>
                     </>
                   )
                 : (
@@ -4563,7 +4629,19 @@ function detectImageFormat(imageBase64: string) {
   return ''
 }
 
-async function validateAliyunUpscaleInput(imageBase64: string) {
+async function resolveAliyunUpscaleMode(
+  imageBase64: string,
+  requestedMode: AliyunUpscaleMode,
+): Promise<AliyunUpscaleResolution> {
+  const dims = await readBase64ImageSize(imageBase64)
+  const shortSide = Math.min(dims.width, dims.height)
+  const longSide = Math.max(dims.width, dims.height)
+
+  if (requestedMode === 'standard') {
+    validateAliyunStandardUpscaleDimensions(dims)
+    return { dimensions: dims, requestedMode, usedMode: 'standard' }
+  }
+
   const byteLength = getBase64ByteLength(imageBase64)
   if (byteLength > ALIYUN_UPSCALE_MAX_BYTES)
     throw new Error(`阿里云生成式超分输入图片不能超过 ${formatSize(ALIYUN_UPSCALE_MAX_BYTES)}`)
@@ -4572,17 +4650,33 @@ async function validateAliyunUpscaleInput(imageBase64: string) {
   if (!format)
     throw new Error('阿里云生成式超分仅支持 JPEG、JPG、PNG、BMP 图片')
 
-  const dims = await readBase64ImageSize(imageBase64)
-  const shortSide = Math.min(dims.width, dims.height)
-  const longSide = Math.max(dims.width, dims.height)
   if (shortSide < ALIYUN_UPSCALE_MIN_SIDE)
     throw new Error(`阿里云生成式超分输入图片最小边不能低于 ${ALIYUN_UPSCALE_MIN_SIDE}px`)
+
   if (longSide > ALIYUN_UPSCALE_MAX_LONG_SIDE)
     throw new Error(`阿里云生成式超分输入图片长边不能超过 ${ALIYUN_UPSCALE_MAX_LONG_SIDE}px`)
-  if (longSide / shortSide > ALIYUN_UPSCALE_MAX_ASPECT_RATIO)
-    throw new Error(`阿里云生成式超分输入图片长宽比不能超过 ${ALIYUN_UPSCALE_MAX_ASPECT_RATIO}:1`)
 
-  return dims
+  if (longSide / shortSide > ALIYUN_UPSCALE_MAX_ASPECT_RATIO) {
+    validateAliyunStandardUpscaleDimensions(dims)
+    return {
+      dimensions: dims,
+      requestedMode,
+      usedMode: 'standard',
+      fallbackReason: `长宽比超过 ${ALIYUN_UPSCALE_MAX_ASPECT_RATIO}:1`,
+    }
+  }
+
+  return { dimensions: dims, requestedMode, usedMode: 'generative' }
+}
+
+function validateAliyunStandardUpscaleDimensions(dimensions: ImageDimensions) {
+  const shortSide = Math.min(dimensions.width, dimensions.height)
+  const longSide = Math.max(dimensions.width, dimensions.height)
+  if (longSide > ALIYUN_STANDARD_UPSCALE_MAX_LONG_SIDE || shortSide > ALIYUN_STANDARD_UPSCALE_MAX_SHORT_SIDE) {
+    throw new Error(
+      `阿里云标准版超分输入图片长边不能超过 ${ALIYUN_STANDARD_UPSCALE_MAX_LONG_SIDE}px，短边不能超过 ${ALIYUN_STANDARD_UPSCALE_MAX_SHORT_SIDE}px`,
+    )
+  }
 }
 
 function makeEmptyUpscaleProvider(provider: UpscaleProvider = 'aliyun'): UpscaleProviderConfig {
@@ -4592,6 +4686,7 @@ function makeEmptyUpscaleProvider(provider: UpscaleProvider = 'aliyun'): Upscale
     provider,
     accessKeyId: '',
     accessKeySecret: '',
+    aliyunUpscaleMode: 'generative',
     apiUrl: '',
     apiKey: '',
   }
@@ -4603,8 +4698,14 @@ function getUpscaleProviderTypeLabel(provider: UpscaleProvider) {
 
 function getUpscaleProviderSummary(provider: UpscaleProviderConfig) {
   if (provider.provider === 'aliyun')
-    return provider.accessKeyId ? `AccessKey ID：${maskValue(provider.accessKeyId)}` : '未填写 AccessKey ID'
+    return provider.accessKeyId
+      ? `AccessKey ID：${maskValue(provider.accessKeyId)} · ${getAliyunUpscaleModeLabel(provider.aliyunUpscaleMode)}`
+      : '未填写 AccessKey ID'
   return provider.apiUrl || '未填写服务地址'
+}
+
+function getAliyunUpscaleModeLabel(mode: AliyunUpscaleMode) {
+  return mode === 'standard' ? '标准版' : '生成式优先'
 }
 
 function maskValue(value: string) {

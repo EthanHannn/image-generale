@@ -62,6 +62,9 @@ export type RequestParams = {
   upscaleProviderId?: string
   upscaleProviderName?: string
   upscaleFactor?: number
+  upscaleModeRequested?: AliyunUpscaleMode
+  upscaleModeUsed?: AliyunUpscaleMode
+  upscaleFallbackReason?: string
   outputWidth?: number
   outputHeight?: number
 }
@@ -141,6 +144,7 @@ type DbConfig = {
 }
 
 export type UpscaleProvider = 'aliyun' | 'custom'
+export type AliyunUpscaleMode = 'generative' | 'standard'
 
 export type UpscaleProviderConfig = {
   id: string
@@ -148,6 +152,7 @@ export type UpscaleProviderConfig = {
   provider: UpscaleProvider
   accessKeyId: string
   accessKeySecret: string
+  aliyunUpscaleMode: AliyunUpscaleMode
   apiUrl: string
   apiKey: string
 }
@@ -156,6 +161,7 @@ export type AliyunUpscaleConfig = {
   provider: 'aliyun'
   accessKeyId: string
   accessKeySecret: string
+  aliyunUpscaleMode: AliyunUpscaleMode
 }
 
 export type CustomUpscaleConfig = {
@@ -186,27 +192,52 @@ export type UpscaleFormState = {
   provider: UpscaleProvider
   accessKeyId: string
   accessKeySecret: string
+  aliyunUpscaleMode: AliyunUpscaleMode
   apiUrl: string
   apiKey: string
 }
 
 export function toUpscaleConfig(form: UpscaleFormState): UpscaleConfig {
   if (form.provider === 'aliyun')
-    return { provider: 'aliyun', accessKeyId: form.accessKeyId, accessKeySecret: form.accessKeySecret }
+    return {
+      provider: 'aliyun',
+      accessKeyId: form.accessKeyId,
+      accessKeySecret: form.accessKeySecret,
+      aliyunUpscaleMode: form.aliyunUpscaleMode,
+    }
   return { provider: 'custom', apiUrl: form.apiUrl, apiKey: form.apiKey }
 }
 
 export function fromUpscaleConfig(config: UpscaleConfig): UpscaleFormState {
   if (config.provider === 'aliyun')
-    return { provider: 'aliyun', accessKeyId: config.accessKeyId, accessKeySecret: config.accessKeySecret, apiUrl: '', apiKey: '' }
-  return { provider: 'custom', apiUrl: config.apiUrl, apiKey: config.apiKey, accessKeyId: '', accessKeySecret: '' }
+    return {
+      provider: 'aliyun',
+      accessKeyId: config.accessKeyId,
+      accessKeySecret: config.accessKeySecret,
+      aliyunUpscaleMode: config.aliyunUpscaleMode,
+      apiUrl: '',
+      apiKey: '',
+    }
+  return {
+    provider: 'custom',
+    apiUrl: config.apiUrl,
+    apiKey: config.apiKey,
+    accessKeyId: '',
+    accessKeySecret: '',
+    aliyunUpscaleMode: 'generative',
+  }
 }
 
 export function upscaleProviderToConfig(provider: UpscaleProviderConfig | null | undefined): UpscaleConfig {
   if (!provider)
     return DEFAULT_UPSCALE_CONFIG
   if (provider.provider === 'aliyun')
-    return { provider: 'aliyun', accessKeyId: provider.accessKeyId, accessKeySecret: provider.accessKeySecret }
+    return {
+      provider: 'aliyun',
+      accessKeyId: provider.accessKeyId,
+      accessKeySecret: provider.accessKeySecret,
+      aliyunUpscaleMode: provider.aliyunUpscaleMode,
+    }
   return { provider: 'custom', apiUrl: provider.apiUrl, apiKey: provider.apiKey }
 }
 
@@ -234,6 +265,7 @@ function normalizeUpscaleConfig(raw: unknown): UpscaleConfig {
       provider: 'aliyun',
       accessKeyId: typeof obj.accessKeyId === 'string' ? obj.accessKeyId : '',
       accessKeySecret: typeof obj.accessKeySecret === 'string' ? obj.accessKeySecret : '',
+      aliyunUpscaleMode: obj.aliyunUpscaleMode === 'standard' ? 'standard' : 'generative',
     }
   }
   // 兼容无 provider 字段的旧格式
@@ -256,6 +288,7 @@ function normalizeUpscaleProviderConfig(raw: unknown): UpscaleProviderConfig | n
     provider,
     accessKeyId: typeof obj.accessKeyId === 'string' ? obj.accessKeyId : '',
     accessKeySecret: typeof obj.accessKeySecret === 'string' ? obj.accessKeySecret : '',
+    aliyunUpscaleMode: obj.aliyunUpscaleMode === 'standard' ? 'standard' : 'generative',
     apiUrl: typeof obj.apiUrl === 'string' ? obj.apiUrl : '',
     apiKey: typeof obj.apiKey === 'string' ? obj.apiKey : '',
   }
@@ -269,6 +302,7 @@ function upscaleConfigToProvider(config: UpscaleConfig, name = '默认超分服�
     provider: form.provider,
     accessKeyId: form.accessKeyId,
     accessKeySecret: form.accessKeySecret,
+    aliyunUpscaleMode: form.aliyunUpscaleMode,
     apiUrl: form.apiUrl,
     apiKey: form.apiKey,
   }
@@ -645,6 +679,45 @@ export function saveHistoryUpscaleVariant(
         [factor]: base64ToBlob(imageBase64),
       }
       const updateRequest = store.put({ ...record, upscaledImages })
+      updateRequest.onsuccess = () => resolve()
+      updateRequest.onerror = () => reject(updateRequest.error)
+    }
+    request.onerror = () => reject(request.error)
+  })
+}
+
+export function saveHistoryUpscaleMetadata(
+  recordId: number,
+  requestedMode: AliyunUpscaleMode,
+  usedMode: AliyunUpscaleMode,
+  fallbackReason?: string,
+) {
+  if (isDesktopApp()) {
+    return invokeDesktop<void>('save_history_upscale_metadata', {
+      recordId,
+      requestedMode,
+      usedMode,
+      fallbackReason: fallbackReason || null,
+    })
+  }
+
+  return withStore<void>('readwrite', (store, resolve, reject) => {
+    const request = store.get(recordId)
+    request.onsuccess = () => {
+      const record = request.result as HistoryRecord | undefined
+      if (!record) {
+        resolve()
+        return
+      }
+      const updateRequest = store.put({
+        ...record,
+        params: {
+          ...record.params,
+          upscaleModeRequested: requestedMode,
+          upscaleModeUsed: usedMode,
+          upscaleFallbackReason: fallbackReason,
+        },
+      })
       updateRequest.onsuccess = () => resolve()
       updateRequest.onerror = () => reject(updateRequest.error)
     }

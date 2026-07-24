@@ -50,6 +50,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
   const promptSummary = record.prompt || '(无 Prompt)'
   const modeText = getHistoryModeText(record.mode)
   const ratioLabel = getHistoryRatioLabel(record)
+  const upscaleModeLabel = getHistoryUpscaleModeLabel(record)
   const sizeLabel = getHistorySizeLabel(record)
   const titleLabel = record.mode === 'upscale' ? (record.providerName || record.modelName || '超分服务') : record.modelId
   const previewUrl = previewIndex !== null ? previewImageUrls[previewIndex] : ''
@@ -350,6 +351,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
             {modeText}
           </span>
           {ratioLabel ? <span className="history-ratio-tag">{ratioLabel}</span> : null}
+          {upscaleModeLabel ? <span className="history-ratio-tag">{upscaleModeLabel}</span> : null}
           <span>{sizeLabel}</span>
           <span>{record.imageCount} 张图片</span>
           <span>{record.duration}s</span>
@@ -357,7 +359,7 @@ export function HistoryRecordCard(props: HistoryRecordCardProps) {
         <div className="card-meta">
           <span className="meta-item">供应商 {record.providerName || '-'}</span>
           <span className="meta-item">占用 {formatSize(record.totalSize || 0)}</span>
-          <span className="meta-item">模式 {record.mode === 'edit' ? '编辑' : '生成'}</span>
+          <span className="meta-item">模式 {record.mode === 'edit' ? '编辑' : record.mode === 'upscale' ? '超分' : '生成'}</span>
         </div>
       </div>
       <ImageActionBar className="card-actions history-card-actions" label="历史记录操作" onClick={event => event.stopPropagation()}>
@@ -605,6 +607,13 @@ function getHistoryRatioLabel(record: HistoryRecord) {
 
   const [width, height] = ratio.split(':').map(Number)
   return width > 0 && height > 0 ? ratio : ''
+}
+
+function getHistoryUpscaleModeLabel(record: HistoryRecord) {
+  const mode = record.params.upscaleModeUsed
+  if (!mode)
+    return ''
+  return mode === 'standard' ? '标准版超分' : '生成式超分'
 }
 
 function hasFullHistoryImages(record: HistoryRecord) {

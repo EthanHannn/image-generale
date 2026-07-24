@@ -34,6 +34,7 @@ enum UpscaleConfig {
     Aliyun {
         access_key_id: String,
         access_key_secret: String,
+        aliyun_upscale_mode: String,
     },
     #[serde(rename = "custom")]
     Custom { api_url: String, api_key: String },
@@ -47,8 +48,14 @@ struct UpscaleProviderConfig {
     provider: String,
     access_key_id: String,
     access_key_secret: String,
+    #[serde(default = "default_aliyun_upscale_mode")]
+    aliyun_upscale_mode: String,
     api_url: String,
     api_key: String,
+}
+
+fn default_aliyun_upscale_mode() -> String {
+    "generative".into()
 }
 
 impl Default for UpscaleConfig {
@@ -82,6 +89,11 @@ where
                 .get("accessKeySecret")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
+                .to_string(),
+            aliyun_upscale_mode: value
+                .get("aliyunUpscaleMode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("generative")
                 .to_string(),
         }),
         _ => Ok(UpscaleConfig::Custom {
@@ -193,6 +205,9 @@ struct RequestParams {
     upscale_provider_id: Option<String>,
     upscale_provider_name: Option<String>,
     upscale_factor: Option<i64>,
+    upscale_mode_requested: Option<String>,
+    upscale_mode_used: Option<String>,
+    upscale_fallback_reason: Option<String>,
     output_width: Option<i64>,
     output_height: Option<i64>,
 }
@@ -1131,6 +1146,56 @@ fn save_history_upscale_variant(
 }
 
 #[tauri::command]
+fn save_history_upscale_metadata(
+    app: AppHandle,
+    record_id: i64,
+    requested_mode: String,
+    used_mode: String,
+    fallback_reason: Option<String>,
+) -> Result<(), String> {
+    let connection = open_history_db(&app)?;
+    let params_json = connection
+        .query_row(
+            "SELECT params_json FROM history_records WHERE id = ? LIMIT 1",
+            params![record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "历史记录不存在".to_string())?;
+    let mut params: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&params_json).unwrap_or_default();
+    params.insert(
+        "upscaleModeRequested".into(),
+        serde_json::Value::String(requested_mode),
+    );
+    params.insert(
+        "upscaleModeUsed".into(),
+        serde_json::Value::String(used_mode),
+    );
+    match fallback_reason.filter(|reason| !reason.trim().is_empty()) {
+        Some(reason) => {
+            params.insert(
+                "upscaleFallbackReason".into(),
+                serde_json::Value::String(reason),
+            );
+        }
+        None => {
+            params.remove("upscaleFallbackReason");
+        }
+    }
+    let next_params_json =
+        serde_json::to_string(&params).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE history_records SET params_json = ? WHERE id = ?",
+            params![next_params_json, record_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn save_history_thumbnails(
     app: AppHandle,
     record_id: i64,
@@ -1448,6 +1513,8 @@ const ALIYUN_UPSCALE_MAX_BYTES: usize = 20 * 1024 * 1024;
 const ALIYUN_UPSCALE_MIN_SIDE: u32 = 64;
 const ALIYUN_UPSCALE_MAX_LONG_SIDE: u32 = 5000;
 const ALIYUN_UPSCALE_MAX_ASPECT_RATIO: f64 = 2.0;
+const ALIYUN_STANDARD_UPSCALE_MAX_LONG_SIDE: u32 = 1920;
+const ALIYUN_STANDARD_UPSCALE_MAX_SHORT_SIDE: u32 = 1080;
 const ALIYUN_RESULT_DOWNLOAD_RETRY_DELAYS_MS: [u64; 3] = [500, 1_000, 2_000];
 
 // RFC 3986 percent-encode，仅保留 unreserved chars
@@ -1547,7 +1614,7 @@ fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
         .or_else(|| bmp_dimensions(data))
 }
 
-fn validate_aliyun_upscale_input(data: &[u8]) -> Result<(u32, u32), String> {
+fn validate_aliyun_generative_upscale_input(data: &[u8]) -> Result<(u32, u32), String> {
     if data.len() > ALIYUN_UPSCALE_MAX_BYTES {
         return Err("阿里云生成式超分输入图片不能超过 20 MB".into());
     }
@@ -1572,6 +1639,23 @@ fn validate_aliyun_upscale_input(data: &[u8]) -> Result<(u32, u32), String> {
         return Err(format!(
             "阿里云生成式超分输入图片长宽比不能超过 {}:1",
             ALIYUN_UPSCALE_MAX_ASPECT_RATIO as u32
+        ));
+    }
+
+    Ok((width, height))
+}
+
+fn validate_aliyun_standard_upscale_input(data: &[u8]) -> Result<(u32, u32), String> {
+    let (width, height) = image_dimensions(data)
+        .ok_or_else(|| "阿里云标准版超分无法解析输入图片尺寸".to_string())?;
+    let short_side = width.min(height);
+    let long_side = width.max(height);
+    if long_side > ALIYUN_STANDARD_UPSCALE_MAX_LONG_SIDE
+        || short_side > ALIYUN_STANDARD_UPSCALE_MAX_SHORT_SIDE
+    {
+        return Err(format!(
+            "阿里云标准版超分输入图片长边不能超过 {}px，短边不能超过 {}px",
+            ALIYUN_STANDARD_UPSCALE_MAX_LONG_SIDE, ALIYUN_STANDARD_UPSCALE_MAX_SHORT_SIDE
         ));
     }
 
@@ -1949,6 +2033,35 @@ async fn submit_super_resolution(
     Ok((SubmitResult::AsyncJob(job_id), json))
 }
 
+async fn make_super_resolution(
+    client: &reqwest::Client,
+    access_key_id: &str,
+    access_key_secret: &str,
+    image_url: &str,
+    scale: u32,
+) -> Result<(String, serde_json::Value), String> {
+    let mut extra = BTreeMap::new();
+    extra.insert("Url".into(), image_url.into());
+    extra.insert("UpscaleFactor".into(), scale.to_string());
+
+    let json = aliyun_rpc_post(
+        client,
+        IMAGEENHAN_ENDPOINT,
+        IMAGEENHAN_API_VERSION,
+        access_key_id,
+        access_key_secret,
+        "MakeSuperResolutionImage",
+        extra,
+    )
+    .await?;
+
+    let result_url = find_url_in_json(&json["Data"]["ResultUrl"])
+        .or_else(|| find_url_in_json(&json["Data"]["Result"]))
+        .or_else(|| find_url_in_json(&json))
+        .ok_or_else(|| format!("MakeSuperResolutionImage 响应缺少结果图片 URL: {}", json))?;
+    Ok((result_url, json))
+}
+
 // Step 4：轮询异步任务（每 2 秒一次，最多 180 秒）
 async fn poll_super_resolution(
     client: &reqwest::Client,
@@ -2044,11 +2157,16 @@ async fn aliyun_upscale(
     image_base64: String,
     target_width: u32,
     target_height: u32,
+    upscale_mode: String,
 ) -> Result<serde_json::Value, String> {
     let image_bytes = STANDARD
         .decode(&image_base64)
         .map_err(|e| format!("base64 解码失败: {}", e))?;
-    let (orig_w, _) = validate_aliyun_upscale_input(&image_bytes)?;
+    let (orig_w, _) = match upscale_mode.as_str() {
+        "generative" => validate_aliyun_generative_upscale_input(&image_bytes)?,
+        "standard" => validate_aliyun_standard_upscale_input(&image_bytes)?,
+        _ => return Err("不支持的阿里云超分版本".into()),
+    };
 
     let ratio = target_width as f64 / orig_w.max(1) as f64;
     let scale = (ratio.round() as u32).clamp(1, 4);
@@ -2063,30 +2181,41 @@ async fn aliyun_upscale(
     let (oss_url, upload_json) = oss_post_object(&client, &token, image_bytes).await?;
 
     // 3. 提交超分任务
-    let (submit_result, submit_json) =
-        submit_super_resolution(&client, &access_key_id, &access_key_secret, &oss_url, scale)
-            .await?;
-
-    // 4. 获取结果 URL；如果接口直接返回 ResultUrl，则不再轮询
-    let (result_url, poll_json) = match submit_result {
-        SubmitResult::DirectUrl(url) => (url, Vec::new()),
-        SubmitResult::AsyncJob(job_id) => {
-            poll_super_resolution(&client, &access_key_id, &access_key_secret, &job_id).await?
-        }
+    let (result_url, submit_json, poll_json, action) = if upscale_mode == "standard" {
+        let (result_url, submit_json) =
+            make_super_resolution(&client, &access_key_id, &access_key_secret, &oss_url, scale)
+                .await?;
+        (result_url, submit_json, Vec::new(), "MakeSuperResolutionImage")
+    } else {
+        let (submit_result, submit_json) =
+            submit_super_resolution(&client, &access_key_id, &access_key_secret, &oss_url, scale)
+                .await?;
+        let (result_url, poll_json) = match submit_result {
+            SubmitResult::DirectUrl(url) => (url, Vec::new()),
+            SubmitResult::AsyncJob(job_id) => {
+                poll_super_resolution(&client, &access_key_id, &access_key_secret, &job_id).await?
+            }
+        };
+        (
+            result_url,
+            submit_json,
+            poll_json,
+            "GenerateSuperResolutionImage",
+        )
     };
 
-    // 5. 下载超分后图片
+    // 4. 下载超分后图片
     let result_url = clean_result_url(&result_url);
     let parsed_result_url = reqwest::Url::parse(&result_url)
         .map_err(|e| format!("结果图片 URL 无效: {}，原始值: {}", e, result_url))?;
     let result_bytes = download_aliyun_result_image(&client, parsed_result_url).await?;
 
-    // 6. 解析结果尺寸，保存到历史目录
+    // 5. 解析结果尺寸，保存到历史目录
     let (result_w, result_h) =
         image_dimensions(&result_bytes).unwrap_or((target_width, target_height));
     let timestamp = now_millis() as i64;
     let image_dir = history_images_dir(&app, timestamp)?;
-    let file_name = format!("{}_upscale_{}x.png", timestamp, scale);
+    let file_name = format!("{}_{}_upscale_{}x.png", timestamp, upscale_mode, scale);
     let dir_name = image_dir
         .file_name()
         .and_then(|v| v.to_str())
@@ -2102,17 +2231,21 @@ async fn aliyun_upscale(
       "height": result_h,
       "local_path": relative_path,
       "scale": scale,
+      "upscale_mode": upscale_mode,
       "response_json": serde_json::json!({
         "authorizeFileUpload": authorize_json,
         "uploadObject": upload_json,
-        "generateSuperResolutionImage": submit_json,
+        "upscaleMode": upscale_mode,
+        "action": action,
+        "submitSuperResolution": submit_json,
         "getAsyncJobResult": poll_json,
         "result": {
           "url": result_url,
           "width": result_w,
           "height": result_h,
           "localPath": relative_path,
-          "scale": scale
+          "scale": scale,
+          "upscaleMode": upscale_mode
         }
       })
     }))
@@ -2141,6 +2274,7 @@ pub fn run() {
             add_history_record,
             set_history_record_favorite,
             save_history_upscale_variant,
+            save_history_upscale_metadata,
             save_history_thumbnails,
             list_history_records,
             list_history_records_page,
